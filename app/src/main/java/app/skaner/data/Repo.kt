@@ -2,6 +2,7 @@ package app.skaner.data
 
 import android.content.Context
 import android.net.Uri
+import app.skaner.cv.Compressor
 import app.skaner.cv.ImageIo
 import app.skaner.cv.Processor
 import app.skaner.cv.Quad
