@@ -20,6 +20,9 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v5
 
+      - name: Версия приложения
+        run: echo "APP_VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)" >> "$GITHUB_ENV"
+
       - name: Сборка release-APK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
@@ -56,12 +59,12 @@ jobs:
 
       - uses: actions/upload-artifact@v5
         with:
-          name: skaner-arm64
+          name: skaner-arm64_${{ env.APP_VERSION }}
           path: app/build/outputs/apk/release/*arm64-v8a*.apk
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v5
         with:
-          name: skaner-armv7-old-phones
+          name: skaner-armv7-old-phones_${{ env.APP_VERSION }}
           path: app/build/outputs/apk/release/*armeabi-v7a*.apk
           if-no-files-found: error

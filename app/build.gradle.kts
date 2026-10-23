@@ -53,6 +53,15 @@ android {
         }
     }
 
+    // Имя файла с версией: app-arm64-v8a-release_0.6.0.apk
+    applicationVariants.all {
+        val version = versionName
+        outputs.all {
+            val out = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            out.outputFileName = out.outputFileName.removeSuffix(".apk") + "_" + version + ".apk"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
