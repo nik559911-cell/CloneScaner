@@ -123,6 +123,7 @@ fun DocScreen(docId: String, addPage: () -> Unit, openPage: (String) -> Unit, on
             try {
                 then(repo.exportPdf(docId))
             } catch (e: Exception) {
+                exporting = false
                 snackbar.showSnackbar("Не удалось собрать PDF: ${e.message}")
             } finally {
                 exporting = false
@@ -160,6 +161,8 @@ fun DocScreen(docId: String, addPage: () -> Unit, openPage: (String) -> Unit, on
                         export { file ->
                             if (Saver.canSaveDirectly) {
                                 val uri = Saver.toDownloads(context, file)
+                                // файл уже записан — индикатор больше не нужен; сообщение висит само по себе
+                                exporting = false
                                 val r = snackbar.showSnackbar(
                                     "Сохранено в «Загрузки/${Saver.FOLDER}» (${Saver.sizeLabel(file.length())})",
                                     actionLabel = "Открыть",
