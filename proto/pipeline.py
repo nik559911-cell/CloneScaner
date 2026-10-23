@@ -33,6 +33,81 @@ def _hugs_frame(q, w, h):
     return bool((np.linalg.norm(order_quad(q) - corners, axis=1) < m).all())
 
 
+NBINS = 8
+
+
+def oriented_edges(gray, s, edge_gray, edge_s):
+    """8 карт краёв по направлению градиента (0..180°, по 22.5°), расширенных 5×5.
+    Сторона листа поддерживается только краями, идущими вдоль неё; у узора скатерти направления случайные."""
+    k5 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    maps = [np.zeros_like(edge_gray) for _ in range(NBINS)]
+    for img, e in ((gray, edge_gray), (s, edge_s)):
+        gx = cv2.Sobel(img, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=3)
+        ang = (np.degrees(np.arctan2(gy, gx)) + 180.0) % 180.0
+        b = np.minimum((ang / (180.0 / NBINS)).astype(np.int32), NBINS - 1)
+        for k in range(NBINS):
+            maps[k] |= np.where((b == k) & (e > 0), 255, 0).astype(np.uint8)
+    return [cv2.dilate(m, k5) for m in maps]
+
+
+def _side_support_oriented(q, maps):
+    """(средняя опора, опора самой слабой стороны, число сторон с настоящим краем).
+    Край засчитывается, только если его градиент перпендикулярен стороне (±1 корзина из 8).
+    Точки на краю кадра: в среднем — слабые 0.35, для «самой слабой стороны» — полноценные
+    (лист просто уходит за кадр)."""
+    h, w = maps[0].shape
+    hit = tot = 0.0
+    real_sides = 0
+    side_min = 1.0
+    for i in range(4):
+        a, b = q[i], q[(i + 1) % 4]
+        d = b - a
+        normal = (np.degrees(np.arctan2(d[0], -d[1])) + 180.0) % 180.0
+        kb = int(normal / (180.0 / NBINS)) % NBINS
+        bins = (kb - 1) % NBINS, kb, (kb + 1) % NBINS
+        n = max(8, int(np.linalg.norm(d) / 3))
+        side_hit = 0.0
+        side_real = side_border = side_tot = 0
+        for t in np.linspace(0.05, 0.95, n):
+            x, y = (a + d * t).round().astype(int)
+            if 0 <= x < w and 0 <= y < h:
+                side_tot += 1
+                on_border = x <= 2 or y <= 2 or x >= w - 3 or y >= h - 3
+                if any(maps[k][y, x] for k in bins):
+                    side_hit += 1.0
+                    side_real += 1
+                elif on_border:
+                    side_hit += 0.35
+                    side_border += 1
+        hit += side_hit
+        tot += side_tot
+        if side_tot:
+            if side_real / side_tot >= 0.5:
+                real_sides += 1
+            side_min = min(side_min, (side_real + side_border) / side_tot)
+    return hit / max(tot, 1), side_min, real_sides
+
+
+def _colorful_fraction(q, s):
+    """Доля пёстрых пикселей внутри рамки: насыщенность выше медианы внутри на 12+.
+    У листа насыщенность ровная (печать, бланк), у скатерти с узором — пятна."""
+    inside = np.zeros(s.shape, np.uint8)
+    cv2.fillConvexPoly(inside, q.astype(np.int32), 255)
+    vals = s[inside > 0]
+    if vals.size == 0:
+        return 1.0
+    return float((vals > np.median(vals) + 12).mean())
+
+
+def _paper_fraction(q, paper_mask):
+    """Доля площади внутри рамки, похожей на бумагу (маска V−S по Отсу)."""
+    inside = np.zeros(paper_mask.shape, np.uint8)
+    cv2.fillConvexPoly(inside, q.astype(np.int32), 255)
+    n = int((inside > 0).sum())
+    return float(((paper_mask > 0) & (inside > 0)).sum()) / max(n, 1)
+
+
 def _side_support(q, edges):
     """(общая опора, число сторон с настоящим краем). Край кадра даёт слабую опору 0.35."""
     hit = tot = 0
@@ -87,35 +162,55 @@ def _intersect(a, b):
     return np.array([x1 + t * (x2 - x1), y1 + t * (y2 - y1)], np.float32)
 
 
+def _cluster_lines(ls, w, h):
+    """Склеить куски одной прямой: угол отличается < 3°, середина одного лежит в 1% кадра от прямой другого.
+    Вес кластера — суммарная длина; прямая кластера — по крайним точкам всех кусков (fitLine)."""
+    tol = 0.01 * max(w, h)
+    clusters = []  # [вес, угол, список линий]
+    for length, l in sorted(ls, key=lambda t: -t[0]):
+        x1, y1, x2, y2 = l
+        ang = np.degrees(np.arctan2(y2 - y1, x2 - x1)) % 180
+        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+        for c in clusters:
+            da = abs(ang - c[1]) % 180
+            if min(da, 180 - da) > 3:
+                continue
+            X1, Y1, X2, Y2 = c[2][0]
+            dist = abs((Y2 - Y1) * mx - (X2 - X1) * my + X2 * Y1 - Y2 * X1) / max(np.hypot(X2 - X1, Y2 - Y1), 1e-6)
+            if dist < tol:
+                c[0] += length
+                c[2].append(l)
+                break
+        else:
+            clusters.append([length, ang, [l]])
+    out = []
+    for weight, _, group in sorted(clusters, key=lambda c: -c[0]):
+        pts = np.array([[l[0], l[1]] for l in group] + [[l[2], l[3]] for l in group], np.float32)
+        vx, vy, x0, y0 = cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01).reshape(-1)
+        out.append((weight, (float(x0 - vx * 100), float(y0 - vy * 100), float(x0 + vx * 100), float(y0 + vy * 100))))
+    return out
+
+
 def _side_lines(edges, w, h):
-    """Прямые-кандидаты для каждой стороны листа + край кадра как запасной вариант."""
+    """Прямые-кандидаты для каждой стороны листа (до 4 сильнейших после склейки кусков) + край кадра."""
     lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=40,
-                            minLineLength=int(0.15 * min(w, h)), maxLineGap=int(0.03 * max(w, h)))
+                            minLineLength=int(0.08 * min(w, h)), maxLineGap=int(0.03 * max(w, h)))
     groups = {"top": [], "bottom": [], "left": [], "right": []}
     if lines is not None:
         for x1, y1, x2, y2 in lines.reshape(-1, 4):
             ang = abs(np.degrees(np.arctan2(y2 - y1, x2 - x1))) % 180
-            length = np.hypot(x2 - x1, y2 - y1)
+            length = float(np.hypot(x2 - x1, y2 - y1))
             l = (float(x1), float(y1), float(x2), float(y2))
             if ang < 35 or ang > 145:   # почти горизонтальная
-                ym = (y1 + y2) / 2
-                groups["top" if ym < h / 2 else "bottom"].append((length, l))
+                groups["top" if (y1 + y2) / 2 < h / 2 else "bottom"].append((length, l))
             elif 55 < ang < 125:        # почти вертикальная
-                xm = (x1 + x2) / 2
-                groups["left" if xm < w / 2 else "right"].append((length, l))
+                groups["left" if (x1 + x2) / 2 < w / 2 else "right"].append((length, l))
     frame = {"top": (0, 0, w - 1, 0), "bottom": (0, h - 1, w - 1, h - 1),
              "left": (0, 0, 0, h - 1), "right": (w - 1, 0, w - 1, h - 1)}
     out = {}
     for side, ls in groups.items():
-        ls.sort(key=lambda t: -t[0])
-        picked = []
-        for _, l in ls:  # не брать почти одинаковые прямые
-            mid = np.array([(l[0] + l[2]) / 2, (l[1] + l[3]) / 2])
-            if all(np.linalg.norm(mid - np.array([(p[0] + p[2]) / 2, (p[1] + p[3]) / 2])) > 0.03 * max(w, h) for p in picked):
-                picked.append(l)
-            if len(picked) == 3:
-                break
-        out[side] = picked + [frame[side]]
+        strong = [l for weight, l in _cluster_lines(ls, w, h) if weight >= 0.15 * min(w, h)][:6]
+        out[side] = strong + [frame[side]]
     return out
 
 
@@ -177,21 +272,24 @@ def candidates(img_bgr):
             quads.append(q)
     quads += _hough_quads(edge_maps[0] | edge_maps[1] | edge_maps[2], w, h)
 
+    maps = oriented_edges(gray, s, edge_maps[0] | edge_maps[1], edge_maps[2])
     pre = []
     for q in quads:
         q = order_quad(q)
         if not cv2.isContourConvex(q.reshape(4, 1, 2)) or cv2.contourArea(q) < min_area or _hugs_frame(q, w, h):
             continue
-        sup, real_sides = _side_support(q, support_map)
+        sup, sup_min, real_sides = _side_support_oriented(q, maps)
         if real_sides < 2:
             continue
-        pre.append((sup, q))
+        pre.append((sup * sup_min, sup, q))
     pre.sort(key=lambda t: -t[0])
     out = []
-    for sup, q in pre[:15]:  # дорогая оценка — только для лучших по опоре на края
+    for key, sup, q in pre[:40]:  # дорогая оценка — только для лучших по опоре на края
         con = _paper_contrast(q, v, s)
+        frac = _paper_fraction(q, masks[0])
+        colorful = _colorful_fraction(q, s)
         area = cv2.contourArea(q) / (w * h)
-        score = sup * (0.4 + con) * np.sqrt(area)
+        score = key * (0.8 + con) * frac * np.sqrt(area) * np.exp(-12 * colorful)
         out.append((score, sup, con, area, q / scale))
     out.sort(key=lambda t: -t[0])
     return out
