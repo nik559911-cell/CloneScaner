@@ -7,6 +7,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -75,4 +76,23 @@ fun openPdf(context: Context, uri: android.net.Uri) {
     } catch (_: android.content.ActivityNotFoundException) {
         android.widget.Toast.makeText(context, "Нет приложения для просмотра PDF", android.widget.Toast.LENGTH_SHORT).show()
     }
+}
+
+/**
+ * Текст в одну строку, который уменьшает шрифт, если не помещается (крупный системный шрифт,
+ * узкие кнопки). Слово никогда не переносится по буквам.
+ */
+@Composable
+fun FitText(text: String, style: androidx.compose.ui.text.TextStyle, modifier: Modifier = Modifier, minScale: Float = 0.7f) {
+    var scale by androidx.compose.runtime.remember(text) { androidx.compose.runtime.mutableFloatStateOf(1f) }
+    androidx.compose.material3.Text(
+        text,
+        style = style.copy(fontSize = style.fontSize * scale),
+        maxLines = 1,
+        softWrap = false,
+        modifier = modifier,
+        onTextLayout = { r ->
+            if (r.didOverflowWidth && scale > minScale) scale = (scale - 0.05f).coerceAtLeast(minScale)
+        },
+    )
 }

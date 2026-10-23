@@ -29,7 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -106,18 +106,27 @@ fun DocsScreen(openCamera: (String) -> Unit, openDoc: (String) -> Unit) {
                     shape = FloatingActionButtonDefaults.extendedFabShape,
                     border = BorderStroke(2.dp, accent),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
-                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
                     modifier = Modifier.weight(1f).height(56.dp),
                 ) {
-                    Text("Из галереи", style = MaterialTheme.typography.labelLarge)
+                    FitText("Из галереи", MaterialTheme.typography.labelLarge)
                 }
-                ExtendedFloatingActionButton(
+                // Своя кнопка вместо ExtendedFloatingActionButton: у той большие фиксированные отступы,
+                // и при крупном системном шрифте подпись переносилась по буквам.
+                Button(
                     onClick = { scope.launch { openCamera(repo.createDraft()) } },
-                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                    text = { Text("Сканировать") },
-                    elevation = FloatingActionButtonDefaults.bottomAppBarFabElevation(),
-                    modifier = Modifier.weight(1f).height(56.dp),
-                )
+                    shape = FloatingActionButtonDefaults.extendedFabShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = accent,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    modifier = Modifier.weight(1.15f).height(56.dp),
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    FitText("Сканировать", MaterialTheme.typography.labelLarge)
+                }
             }
         },
         snackbarHost = { SnackbarHost(snackbar) },
