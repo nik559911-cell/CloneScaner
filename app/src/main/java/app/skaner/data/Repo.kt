@@ -150,21 +150,46 @@ class Repo(private val context: Context, private val dao: ScanDao, private val f
         withContext(Dispatchers.IO) { files.docDir(docId).deleteRecursively() }
     }
 
-    /** PDF в cache/export; страницы без обработки сначала пересчитываются. */
-    suspend fun exportPdf(docId: String, pageSize: PdfWriter.PageSize = PdfWriter.PageSize.A4): File {
+    /** Переименовать документ. Пустое имя не принимается. */
+    suspend fun rename(docId: String, title: String) {
+        val t = title.trim().take(100)
+        require(t.isNotEmpty()) { "Название не может быть пустым" }
+        val doc = dao.getDocument(docId) ?: return
+        dao.updateDocument(doc.copy(title = t, updatedAt = System.currentTimeMillis()))
+    }
+
+    /**
+     * PDF в cache/export; страницы без обработки сначала пересчитываются.
+     * compress = true: каждая страница пережимается до ≤ 60% своего размера (сжатие на 40%).
+     */
+    suspend fun exportPdf(
+        docId: String,
+        compress: Boolean = true,
+        pageSize: PdfWriter.PageSize = PdfWriter.PageSize.A4,
+    ): File {
         val doc = dao.getDocument(docId) ?: error("Документ не найден")
         for (p in dao.getPages(docId)) if (p.processedPath == null || !File(p.processedPath).exists()) render(p.id)
-        val pages = dao.getPages(docId).map { p ->
-            val f = File(p.processedPath!!)
-            val (w, h) = ImageIo.size(f)
-            PdfWriter.JpegPage(f, w, h)
-        }
-        return withContext(Dispatchers.IO) {
-            files.exportDir.mkdirs()
-            files.exportDir.listFiles()?.forEach { it.delete() }
-            val out = File(files.exportDir, safeName(doc.title) + ".pdf")
-            PdfWriter.write(pages, out, pageSize)
-            out
+        val sources = dao.getPages(docId).map { File(it.processedPath!!) }
+        return cpu.withLock {
+            withContext(Dispatchers.IO) {
+                files.exportDir.mkdirs()
+                files.exportDir.listFiles()?.forEach { it.deleteRecursively() }
+                val tmp = File(files.exportDir, "pages").apply { mkdirs() }
+                val pages = sources.mapIndexed { i, f ->
+                    if (compress) {
+                        val out = File(tmp, "$i.jpg")
+                        val (w, h) = Compressor.compress(f, out, Compressor.TARGET_RATIO)
+                        PdfWriter.JpegPage(out, w, h)
+                    } else {
+                        val (w, h) = ImageIo.size(f)
+                        PdfWriter.JpegPage(f, w, h)
+                    }
+                }
+                val out = File(files.exportDir, safeName(doc.title) + ".pdf")
+                PdfWriter.write(pages, out, pageSize)
+                tmp.deleteRecursively()
+                out
+            }
         }
     }
 

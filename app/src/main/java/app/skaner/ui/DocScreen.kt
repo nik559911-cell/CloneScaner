@@ -1,6 +1,27 @@
 package app.skaner.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import app.skaner.data.Saver
+import java.io.File
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,28 +81,90 @@ fun DocScreen(docId: String, addPage: () -> Unit, openPage: (String) -> Unit, on
     var exporting by remember { mutableStateOf(false) }
     var confirmDeleteDoc by remember { mutableStateOf(false) }
     var pageToDelete by remember { mutableStateOf<PageEntity?>(null) }
+    var renaming by remember { mutableStateOf(false) }
+    var pendingSave by remember { mutableStateOf<File?>(null) }
+
+    // Android 8–9: «Загрузки» без разрешения недоступны — сохраняем через системный диалог
+    val saveAs = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val file = pendingSave
+        pendingSave = null
+        if (uri == null || file == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            try {
+                Saver.toUri(context, file, uri)
+                snackbar.showSnackbar("PDF сохранён (${Saver.sizeLabel(file.length())})")
+            } catch (e: Exception) {
+                snackbar.showSnackbar("Не удалось сохранить: ${e.message}")
+            }
+        }
+    }
+
+    fun export(then: suspend (File) -> Unit) {
+        exporting = true
+        scope.launch {
+            try {
+                then(repo.exportPdf(docId))
+            } catch (e: Exception) {
+                snackbar.showSnackbar("Не удалось собрать PDF: ${e.message}")
+            } finally {
+                exporting = false
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") } },
-                title = { Text(doc?.title ?: "", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                title = {
+                    Text(
+                        doc?.title ?: "",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable(enabled = doc != null) { renaming = true },
+                    )
+                },
                 actions = {
-                    IconButton(enabled = pages.isNotEmpty() && !exporting, onClick = {
-                        exporting = true
-                        scope.launch {
-                            try {
-                                sharePdf(context, repo.exportPdf(docId))
-                            } catch (e: Exception) {
-                                snackbar.showSnackbar("Не удалось собрать PDF: ${e.message}")
-                            } finally {
-                                exporting = false
-                            }
-                        }
-                    }) { Icon(Icons.Filled.Share, "Отправить PDF") }
+                    IconButton(enabled = doc != null, onClick = { renaming = true }) { Icon(Icons.Filled.Edit, "Переименовать") }
                     IconButton(onClick = { confirmDeleteDoc = true }) { Icon(Icons.Filled.Delete, "Удалить документ") }
                 },
             )
+        },
+        bottomBar = {
+            Row(
+                Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                OutlinedButton(
+                    enabled = pages.isNotEmpty() && !exporting,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        export { file ->
+                            if (Saver.canSaveDirectly) {
+                                val uri = Saver.toDownloads(context, file)
+                                val r = snackbar.showSnackbar(
+                                    "Сохранено в «Загрузки/${Saver.FOLDER}» (${Saver.sizeLabel(file.length())})",
+                                    actionLabel = "Открыть",
+                                    duration = SnackbarDuration.Long,
+                                )
+                                if (r == SnackbarResult.ActionPerformed) openPdf(context, uri)
+                            } else {
+                                pendingSave = file
+                                saveAs.launch(file.name)
+                            }
+                        }
+                    },
+                ) { Text("Сохранить") }
+                Button(
+                    enabled = pages.isNotEmpty() && !exporting,
+                    modifier = Modifier.weight(1f),
+                    onClick = { export { file -> sharePdf(context, file) } },
+                ) {
+                    Icon(Icons.Filled.Share, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Отправить")
+                }
+            }
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
@@ -129,6 +212,37 @@ fun DocScreen(docId: String, addPage: () -> Unit, openPage: (String) -> Unit, on
                 }
             }
         }
+    }
+
+    if (renaming) {
+        val current = doc?.title ?: ""
+        var text by remember { mutableStateOf(TextFieldValue(current, TextRange(0, current.length))) }
+        val focus = remember { FocusRequester() }
+        LaunchedEffect(Unit) { focus.requestFocus() }
+        AlertDialog(
+            onDismissRequest = { renaming = false },
+            title = { Text("Название скана") },
+            text = {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { if (it.text.length <= 100) text = it },
+                    singleLine = true,
+                    isError = text.text.isBlank(),
+                    supportingText = { Text("Так будет называться и PDF-файл") },
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                )
+            },
+            confirmButton = {
+                TextButton(enabled = text.text.isNotBlank(), onClick = {
+                    renaming = false
+                    scope.launch {
+                        runCatching { repo.rename(docId, text.text) }
+                            .onFailure { snackbar.showSnackbar(it.message ?: "Не удалось переименовать") }
+                    }
+                }) { Text("Сохранить") }
+            },
+            dismissButton = { TextButton(onClick = { renaming = false }) { Text("Отмена") } },
+        )
     }
 
     if (confirmDeleteDoc) {

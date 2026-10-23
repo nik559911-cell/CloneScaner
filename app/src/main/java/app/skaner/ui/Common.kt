@@ -61,3 +61,16 @@ val filterNames = mapOf(
     "gray" to "Серый",
     "bw" to "Ч/Б",
 )
+
+/** Открыть сохранённый PDF во внешнем просмотрщике (если он есть). */
+fun openPdf(context: Context, uri: android.net.Uri) {
+    val view = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "application/pdf")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    try {
+        context.startActivity(view)
+    } catch (_: android.content.ActivityNotFoundException) {
+        android.widget.Toast.makeText(context, "Нет приложения для просмотра PDF", android.widget.Toast.LENGTH_SHORT).show()
+    }
+}
