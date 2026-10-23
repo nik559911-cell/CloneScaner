@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -13,16 +15,38 @@ android {
         applicationId = "app.skaner"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
-        ndk {
-            // только телефонные архитектуры: OpenCV — основная часть веса APK
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        versionCode = 4
+        versionName = "0.3.1"
+    }
+
+    // Постоянная подпись: без неё каждая сборка в CI подписывается новым ключом
+    // и обновление поверх старой версии невозможно. Репозиторий приватный, приложение — для себя и коллег.
+    val signing = Properties().apply { file("signing.properties").inputStream().use { load(it) } }
+    signingConfigs {
+        create("skaner") {
+            storeFile = file(signing.getProperty("storeFile"))
+            storePassword = signing.getProperty("storePassword")
+            keyAlias = signing.getProperty("keyAlias")
+            keyPassword = signing.getProperty("keyPassword")
+        }
+    }
+
+    // Отдельный APK на архитектуру: OpenCV — основная часть веса, ставить обе незачем.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
         }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("skaner")
+        }
         release {
+            signingConfig = signingConfigs.getByName("skaner")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

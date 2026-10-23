@@ -20,11 +20,11 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v5
 
-      - name: Сборка debug-APK
+      - name: Сборка release-APK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           set +e
-          ./gradlew --no-daemon assembleDebug 2>&1 | tee build.log
+          ./gradlew --no-daemon assembleRelease 2>&1 | tee build.log
           code=${PIPESTATUS[0]}
           if [ "$code" != "0" ]; then
             # ошибки компиляции и Gradle — в аннотации, чтобы их было видно без полного лога
@@ -45,7 +45,8 @@ jobs:
 
       - name: Состав APK
         run: |
-          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          APK=$(ls app/build/outputs/apk/release/*arm64-v8a*.apk | head -1)
+          for f in app/build/outputs/apk/release/*.apk; do echo "::notice::$(basename "$f"): $(du -k "$f" | cut -f1) КБ"; done
           echo "::notice::APK $(du -k "$APK" | cut -f1) КБ"
           # группируем по верхнему уровню (lib/arm64-v8a, classes*.dex, res, …): сжатый и полный размер
           unzip -lv "$APK" | awk 'NR>3 && $1 ~ /^[0-9]+$/ {n=$8; split(n,a,"/"); k=(a[1]=="lib")? a[1]"/"a[2] : (n ~ /\.dex$/ ? "dex" : a[1]); full[k]+=$1; comp[k]+=$3} END {for (k in full) printf "%s %d %d\n", k, comp[k]/1024, full[k]/1024}' | sort -k2 -nr | head -12 | while read k c f; do
@@ -55,6 +56,12 @@ jobs:
 
       - uses: actions/upload-artifact@v5
         with:
-          name: skaner-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: skaner-arm64
+          path: app/build/outputs/apk/release/*arm64-v8a*.apk
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: skaner-armv7-old-phones
+          path: app/build/outputs/apk/release/*armeabi-v7a*.apk
           if-no-files-found: error
