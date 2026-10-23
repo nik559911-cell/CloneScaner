@@ -9,6 +9,8 @@ jobs:
   build:
     # 24.04: Android SDK предустановлен (ANDROID_HOME)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # нужен только для создания релиза по тегу
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -68,3 +70,17 @@ jobs:
           name: skaner-armv7-old-phones_${{ env.APP_VERSION }}
           path: app/build/outputs/apk/release/*armeabi-v7a*.apk
           if-no-files-found: error
+
+      # Релиз: git tag v0.6.1 && git push origin v0.6.1 — тег должен совпадать с versionName
+      - name: Релиз на GitHub
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF_NAME" != "v$APP_VERSION" ]; then
+            echo "::error::Тег $GITHUB_REF_NAME не совпадает с версией в app/build.gradle.kts (v$APP_VERSION)"; exit 1
+          fi
+          NOTES="release-notes/$GITHUB_REF_NAME.md"
+          if [ -f "$NOTES" ]; then ARGS=(--notes-file "$NOTES"); else ARGS=(--generate-notes); fi
+          gh release create "$GITHUB_REF_NAME" app/build/outputs/apk/release/*.apk \
+            --title "Сканер $APP_VERSION" "${ARGS[@]}"
