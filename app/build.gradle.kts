@@ -15,8 +15,8 @@ android {
         applicationId = "app.skaner"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.3.1"
+        versionCode = 5
+        versionName = "0.4.0"
     }
 
     // Постоянная подпись: без неё каждая сборка в CI подписывается новым ключом
@@ -93,4 +93,5 @@ dependencies {
 
     implementation(libs.androidx.exifinterface)
     implementation(libs.opencv)
+    implementation(libs.reorderable)
 }

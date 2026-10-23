@@ -18,7 +18,7 @@ import kotlin.math.roundToInt
 
 /**
  * Ядро сканера. Повторяет проверенный прототип proto/pipeline.py шаг в шаг:
- * поиск листа (Detector) → перспектива → поворот на 90° → выпрямление строк (TextAlign) → фильтр.
+ * поиск листа (Detector) → перспектива → выпрямление строк (TextAlign) → поворот кнопкой → фильтр.
  * Все Mat здесь в RGB (у прототипа BGR — для поканальных операций это не важно,
  * для яркости используется COLOR_RGB2GRAY).
  */
@@ -42,30 +42,6 @@ object Processor {
     }
 
     fun detect(rgb: Mat): Quad? = Detector.detect(rgb)
-
-    /**
-     * Сколько градусов по часовой повернуть страницу, чтобы текст стоял прямо.
-     * Считается по уже обрезанному листу (фон вокруг сбивает подсказки), на копии до 1600 px.
-     */
-    fun orientation(original: Bitmap, quad: Quad?): Int {
-        val rgba = Mat()
-        Utils.bitmapToMat(original, rgba)
-        var rgb = Mat()
-        Imgproc.cvtColor(rgba, rgb, Imgproc.COLOR_RGBA2RGB)
-        rgba.release()
-        if (quad != null && quad.ordered().isValid()) {
-            val warped = warp(rgb, quad, 1600)
-            rgb.release()
-            rgb = warped
-        } else {
-            rgb = limit(rgb, 1600)
-        }
-        return try {
-            TextAlign.orientation(rgb)
-        } finally {
-            rgb.release()
-        }
-    }
 
     // ---------- перспектива и поворот ----------
 
@@ -267,8 +243,8 @@ object Processor {
             rgb = warped
         }
         rgb = limit(rgb, OUTPUT_MAX_SIDE)
-        rgb = rotate(rgb, rotation)
-        rgb = TextAlign.deskew(rgb) // строки по горизонту (до ±15°)
+        rgb = TextAlign.deskew(rgb) // строки по горизонту (до ±15°); от поворота на 90° не зависит
+        rgb = rotate(rgb, rotation)  // поворот кнопкой на экране страницы
 
         val result = applyFilter(rgb, filter)
         rgb.release()

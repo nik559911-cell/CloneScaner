@@ -130,6 +130,9 @@ interface ScanDao {
     @Query("DELETE FROM pages WHERE id = :id")
     suspend fun deletePage(id: String)
 
+    @Query("UPDATE pages SET position = :position WHERE id = :id")
+    suspend fun setPosition(id: String, position: Int)
+
     @Query("DELETE FROM pages WHERE document_id = :docId")
     suspend fun deletePagesOf(docId: String)
 

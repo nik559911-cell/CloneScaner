@@ -2,6 +2,7 @@ package app.skaner.data
 
 import android.content.Context
 import android.net.Uri
+import androidx.room.withTransaction
 import app.skaner.cv.Compressor
 import app.skaner.cv.ImageIo
 import app.skaner.cv.Processor
@@ -32,7 +33,8 @@ class FileStore(context: Context) {
     fun allFiles(): List<File> = root.walkTopDown().filter { it.isFile }.toList()
 }
 
-class Repo(private val context: Context, private val dao: ScanDao, private val files: FileStore) {
+class Repo(private val context: Context, private val db: AppDb, private val files: FileStore) {
+    private val dao: ScanDao = db.dao()
 
     /** Тяжёлая обработка по одной странице за раз — иначе несколько 12-Мп кадров не влезут в память. */
     private val cpu = Mutex()
@@ -70,14 +72,12 @@ class Repo(private val context: Context, private val dao: ScanDao, private val f
             try {
                 ImageIo.saveJpeg(bmp, orig, 95)
                 val quad = Processor.detect(bmp)
-                // текст боком или вверх ногами — повернуть сразу; пользователь может поправить кнопкой «Повернуть»
-                val rotation = runCatching { Processor.orientation(bmp, quad) }.getOrDefault(0)
                 val now = System.currentTimeMillis()
                 dao.insertPage(
                     PageEntity(
                         id = pageId, documentId = docId, position = dao.nextPosition(docId),
                         originalPath = orig.absolutePath, processedPath = null, thumbPath = null,
-                        quad = quad?.toJson(), rotation = rotation, filter = filter,
+                        quad = quad?.toJson(), rotation = 0, filter = filter,
                         width = bmp.width, height = bmp.height, createdAt = now, updatedAt = now,
                     ),
                 )
@@ -104,7 +104,7 @@ class Repo(private val context: Context, private val dao: ScanDao, private val f
     suspend fun updatePage(pageId: String, quad: Quad?, rotation: Int, filter: String) {
         val page = dao.getPage(pageId) ?: return
         dao.updatePage(
-            page.copy(quad = quad?.toJson(), rotation = rotation, filter = filter, updatedAt = System.currentTimeMillis()),
+            page.copy(quad = quad?.toJson(), rotation = 0, filter = filter, updatedAt = System.currentTimeMillis()),
         )
         render(pageId)
     }
@@ -143,6 +143,20 @@ class Repo(private val context: Context, private val dao: ScanDao, private val f
         dao.deletePage(pageId)
         listOfNotNull(page.originalPath, page.processedPath, page.thumbPath).forEach { File(it).delete() }
         touch(page.documentId)
+    }
+
+    /**
+     * Новый порядок страниц. Позиции уникальны внутри документа, а SQLite проверяет уникальность сразу,
+     * поэтому сначала уводим все позиции в отрицательный диапазон, затем записываем новые — одной транзакцией.
+     */
+    suspend fun reorder(docId: String, pageIds: List<String>) {
+        db.withTransaction {
+            val current = dao.getPages(docId)
+            require(current.map { it.id }.toSet() == pageIds.toSet()) { "Список страниц изменился" }
+            current.forEach { dao.setPosition(it.id, -it.position - 1) }
+            pageIds.forEachIndexed { i, id -> dao.setPosition(id, i) }
+        }
+        touch(docId)
     }
 
     suspend fun deleteDocument(docId: String) {

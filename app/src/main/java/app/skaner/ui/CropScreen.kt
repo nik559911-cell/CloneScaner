@@ -66,14 +66,12 @@ fun CropScreen(pageId: String, onNext: () -> Unit, onBack: () -> Unit) {
     var page by remember { mutableStateOf<PageEntity?>(null) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     val corners = remember { mutableStateListOf<Offset>() }
-    var rotation by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(pageId) {
         val p = repo.page(pageId) ?: return@LaunchedEffect onBack()
         page = p
-        rotation = p.rotation
         val q = (Quad.fromJson(p.quad) ?: Quad.full(p.width, p.height)).ordered()
         corners.clear()
         corners.addAll(q.pts.map { Offset(it.first, it.second) })
@@ -180,16 +178,13 @@ fun CropScreen(pageId: String, onNext: () -> Unit, onBack: () -> Unit) {
                     }
                 }
             }) { Text("Авто", color = Color.White) }
-            TextButton(enabled = !busy, onClick = { rotation = (rotation + 90) % 360 }) {
-                Text(if (rotation == 0) "Повернуть" else "Поворот $rotation°", color = Color.White)
-            }
             Button(enabled = valid && !busy, onClick = {
                 val p = page ?: return@Button
                 val q = quad ?: return@Button
                 busy = true
                 scope.launch {
                     try {
-                        repo.updatePage(p.id, q, rotation, p.filter)
+                        repo.updatePage(p.id, q, p.rotation, p.filter)
                         onNext()
                     } catch (e: Exception) {
                         error = "Не удалось обработать: ${e.message}"

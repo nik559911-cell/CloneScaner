@@ -2,8 +2,6 @@ package app.skaner.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.view.OrientationEventListener
-import android.view.Surface
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -96,24 +94,6 @@ private fun CameraContent(docId: String, onCaptured: (String) -> Unit) {
     val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER } }
     val capture = remember {
         ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build()
-    }
-
-    // Интерфейс всегда вертикальный, а телефон могут держать боком: сообщаем камере реальный поворот,
-    // чтобы снимок сохранялся правильно ориентированным.
-    DisposableEffect(Unit) {
-        val listener = object : OrientationEventListener(context) {
-            override fun onOrientationChanged(orientation: Int) {
-                if (orientation == ORIENTATION_UNKNOWN) return
-                capture.targetRotation = when (orientation) {
-                    in 45..134 -> Surface.ROTATION_270
-                    in 135..224 -> Surface.ROTATION_180
-                    in 225..314 -> Surface.ROTATION_90
-                    else -> Surface.ROTATION_0
-                }
-            }
-        }
-        if (listener.canDetectOrientation()) listener.enable()
-        onDispose { listener.disable() }
     }
 
     DisposableEffect(lifecycle) {

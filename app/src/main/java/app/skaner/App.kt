@@ -23,7 +23,7 @@ class App : Application() {
         super.onCreate()
         if (!OpenCVLoader.initLocal()) Log.e("Skaner", "OpenCV не загрузился")
         val db = Room.databaseBuilder(this, AppDb::class.java, "skaner.db").build()
-        repo = Repo(this, db.dao(), FileStore(this))
+        repo = Repo(this, db, FileStore(this))
         appScope.launch { runCatching { repo.cleanup() } }
     }
 }

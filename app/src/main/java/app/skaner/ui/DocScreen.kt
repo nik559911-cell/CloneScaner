@@ -1,6 +1,16 @@
 package app.skaner.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyGridState
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -22,7 +32,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import app.skaner.data.Saver
 import java.io.File
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,7 +41,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -68,7 +76,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.skaner.data.PageEntity
 import kotlinx.coroutines.launch
 
-/** S05 — документ: страницы, добавить, удалить, поделиться PDF (S07). */
+/** S05 — документ: страницы (перетаскивание — порядок), добавить, удалить, переименовать, сохранить и отправить PDF (S07). */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun DocScreen(docId: String, addPage: () -> Unit, openPage: (String) -> Unit, onBack: () -> Unit) {
@@ -82,6 +90,16 @@ fun DocScreen(docId: String, addPage: () -> Unit, openPage: (String) -> Unit, on
     var confirmDeleteDoc by remember { mutableStateOf(false) }
     var pageToDelete by remember { mutableStateOf<PageEntity?>(null) }
     var renaming by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
+
+    // Порядок на экране: во время перетаскивания живёт локально, после отпускания сохраняется в базу.
+    var order by remember { mutableStateOf(emptyList<PageEntity>()) }
+    var dragging by remember { mutableStateOf(false) }
+    LaunchedEffect(pages) { if (!dragging) order = pages }
+    val gridState = rememberLazyGridState()
+    val reorderState = rememberReorderableLazyGridState(gridState) { from, to ->
+        order = order.toMutableList().apply { add(to.index, removeAt(from.index)) }
+    }
     var pendingSave by remember { mutableStateOf<File?>(null) }
 
     // Android 8–9: «Загрузки» без разрешения недоступны — сохраняем через системный диалог
@@ -178,28 +196,56 @@ fun DocScreen(docId: String, addPage: () -> Unit, openPage: (String) -> Unit, on
         Box(Modifier.fillMaxSize().padding(pad)) {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(150.dp),
+                state = gridState,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 96.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                itemsIndexed(pages, key = { _, p -> p.id }) { i, p ->
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Card(
-                            Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(0.71f)
-                                .combinedClickable(onClick = { openPage(p.id) }, onLongClick = { pageToDelete = p }),
+                items(order, key = { it.id }) { p ->
+                    val number = order.indexOf(p) + 1
+                    ReorderableItem(reorderState, key = p.id) { isDragging ->
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.graphicsLayer { if (isDragging) { scaleX = 1.05f; scaleY = 1.05f } },
                         ) {
-                            FileImage(p.thumbPath, p.updatedAt, 400, Modifier.fillMaxSize(), ContentScale.Fit, "Страница ${i + 1}")
+                            Box {
+                                Card(
+                                    onClick = { openPage(p.id) },
+                                    elevation = CardDefaults.cardElevation(defaultElevation = if (isDragging) 8.dp else 1.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .aspectRatio(0.71f)
+                                        .longPressDraggableHandle(
+                                            onDragStarted = {
+                                                dragging = true
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            },
+                                            onDragStopped = {
+                                                dragging = false
+                                                val ids = order.map { it.id }
+                                                scope.launch {
+                                                    runCatching { repo.reorder(docId, ids) }
+                                                        .onFailure { snackbar.showSnackbar("Не удалось сохранить порядок: ${it.message}") }
+                                                }
+                                            },
+                                        ),
+                                ) {
+                                    FileImage(p.thumbPath, p.updatedAt, 400, Modifier.fillMaxSize(), ContentScale.Fit, "Страница $number")
+                                }
+                                FilledTonalIconButton(
+                                    onClick = { pageToDelete = p },
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(32.dp),
+                                ) { Icon(Icons.Filled.Close, "Удалить страницу $number", Modifier.size(18.dp)) }
+                            }
+                            Text("$number", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 4.dp))
                         }
-                        Text("${i + 1}", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 4.dp))
                     }
                 }
             }
-            if (pages.isNotEmpty()) {
+            if (order.size > 1) {
                 Text(
-                    "Нажмите на страницу, чтобы поправить, удерживайте — чтобы удалить",
+                    "Удерживайте страницу и перетащите, чтобы поменять порядок",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),

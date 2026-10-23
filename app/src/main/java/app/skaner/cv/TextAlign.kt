@@ -181,11 +181,19 @@ object TextAlign {
         return if (votes[1] < votes[0] - 0.1) options[1] else options[0]
     }
 
-    /** Выпрямить строки (до ±limit°); края заполняются соседними пикселями. Исходный Mat освобождается. */
+    /**
+     * Выпрямить строки (до ±limit°); края заполняются соседними пикселями. Исходный Mat освобождается.
+     * Работает и для страницы боком: повороты вокруг центра перестановочны, поэтому угол, найденный
+     * на маске, повёрнутой на 90°, годится и для исходной картинки. Так выпрямление не зависит от кнопки «Повернуть».
+     */
     fun deskew(img: Mat, limit: Double = 15.0): Mat {
         val m = inkMask(img, 1000)
-        val (a, _) = skewAngle(m, limit)
+        val (a0, s0) = skewAngle(m, limit)
+        val m90 = rotateCw(m, 90)
+        val (a90, s90) = skewAngle(m90, limit)
+        m90.release()
         m.release()
+        val a = if (s90 > 1.25 * s0) a90 else a0
         if (abs(a) < 0.2) return img
         val r = Imgproc.getRotationMatrix2D(Point(img.cols() / 2.0, img.rows() / 2.0), a, 1.0)
         val out = Mat()

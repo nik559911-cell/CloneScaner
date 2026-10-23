@@ -39,3 +39,18 @@ for name, im in pages.items():
         ok &= good
         print(f'{name}: наклон {a:+d}° → найден {est:+.1f}° (ожидалось {base - a:+.1f}°)', 'OK' if good else 'ОШИБКА')
 print('ИТОГ:', 'OK' if ok else 'ЕСТЬ ПРОБЛЕМЫ')
+
+# выпрямление не зависит от поворота на 90°: deskew → поворот == поворот → deskew
+ok2 = True
+for name, im in pages.items():
+    h, w = im.shape[:2]
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), 5, 1)
+    tilted = cv2.warpAffine(im, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+    angles = []
+    for cw in (0, 90, 180, 270):
+        _, a = P.deskew(P.rotate90s(tilted, cw))
+        angles.append(round(a, 1))
+    same = max(angles) - min(angles) <= 0.3
+    ok2 &= same
+    print(f'{name}: угол выпрямления при повороте 0/90/180/270: {angles}', 'OK' if same else 'ОШИБКА')
+print('ИТОГ выпрямления при повороте:', 'OK' if ok2 else 'ЕСТЬ ПРОБЛЕМЫ')
