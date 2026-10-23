@@ -69,12 +69,14 @@ class Repo(private val context: Context, private val dao: ScanDao, private val f
             try {
                 ImageIo.saveJpeg(bmp, orig, 95)
                 val quad = Processor.detect(bmp)
+                // текст боком или вверх ногами — повернуть сразу; пользователь может поправить кнопкой «Повернуть»
+                val rotation = runCatching { Processor.orientation(bmp, quad) }.getOrDefault(0)
                 val now = System.currentTimeMillis()
                 dao.insertPage(
                     PageEntity(
                         id = pageId, documentId = docId, position = dao.nextPosition(docId),
                         originalPath = orig.absolutePath, processedPath = null, thumbPath = null,
-                        quad = quad?.toJson(), rotation = 0, filter = filter,
+                        quad = quad?.toJson(), rotation = rotation, filter = filter,
                         width = bmp.width, height = bmp.height, createdAt = now, updatedAt = now,
                     ),
                 )

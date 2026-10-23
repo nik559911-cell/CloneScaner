@@ -6,8 +6,6 @@ import org.opencv.android.Utils
 import org.opencv.core.Core
 import org.opencv.core.CvType
 import org.opencv.core.Mat
-import org.opencv.core.MatOfInt
-import org.opencv.core.MatOfPoint
 import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Point
 import org.opencv.core.Scalar
@@ -20,12 +18,11 @@ import kotlin.math.roundToInt
 
 /**
  * Ядро сканера. Повторяет проверенный прототип proto/pipeline.py шаг в шаг:
- * поиск листа → перспектива → поворот → фильтр.
+ * поиск листа (Detector) → перспектива → поворот на 90° → выпрямление строк (TextAlign) → фильтр.
  * Все Mat здесь в RGB (у прототипа BGR — для поканальных операций это не важно,
  * для яркости используется COLOR_RGB2GRAY).
  */
 object Processor {
-    private const val DETECT_SIDE = 640.0
     /** Длинная сторона результата: A4 при 300 dpi. */
     const val OUTPUT_MAX_SIDE = 3508
 
@@ -44,71 +41,30 @@ object Processor {
         }
     }
 
-    fun detect(rgb: Mat): Quad? {
-        val w = rgb.cols()
-        val h = rgb.rows()
-        val scale = DETECT_SIDE / max(w, h)
-        val small = Mat()
-        Imgproc.resize(rgb, small, Size((w * scale).roundToInt().toDouble(), (h * scale).roundToInt().toDouble()), 0.0, 0.0, Imgproc.INTER_AREA)
-        val gray = Mat()
-        Imgproc.cvtColor(small, gray, Imgproc.COLOR_RGB2GRAY)
-        Imgproc.GaussianBlur(gray, gray, Size(5.0, 5.0), 0.0)
-        val minArea = 0.2 * small.cols() * small.rows()
-        val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
+    fun detect(rgb: Mat): Quad? = Detector.detect(rgb)
 
-        val edges = Mat()
-        Imgproc.Canny(gray, edges, 50.0, 150.0)
-        Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel)
-        var quad = bestQuad(edges, minArea)
-        if (quad == null) {
-            // запасной путь: светлый лист на тёмном фоне
-            val th = Mat()
-            Imgproc.threshold(gray, th, 0.0, 255.0, Imgproc.THRESH_BINARY + Imgproc.THRESH_OTSU)
-            Imgproc.morphologyEx(th, th, Imgproc.MORPH_OPEN, kernel)
-            quad = bestQuad(th, minArea)
-            th.release()
+    /**
+     * Сколько градусов по часовой повернуть страницу, чтобы текст стоял прямо.
+     * Считается по уже обрезанному листу (фон вокруг сбивает подсказки), на копии до 1600 px.
+     */
+    fun orientation(original: Bitmap, quad: Quad?): Int {
+        val rgba = Mat()
+        Utils.bitmapToMat(original, rgba)
+        var rgb = Mat()
+        Imgproc.cvtColor(rgba, rgb, Imgproc.COLOR_RGBA2RGB)
+        rgba.release()
+        if (quad != null && quad.ordered().isValid()) {
+            val warped = warp(rgb, quad, 1600)
+            rgb.release()
+            rgb = warped
+        } else {
+            rgb = limit(rgb, 1600)
         }
-        listOf(small, gray, edges, kernel).forEach { it.release() }
-        return quad?.scaled((1.0 / scale).toFloat())?.ordered()
-    }
-
-    private fun bestQuad(binary: Mat, minArea: Double): Quad? {
-        val contours = ArrayList<MatOfPoint>()
-        val hierarchy = Mat()
-        Imgproc.findContours(binary.clone(), contours, hierarchy, Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE)
-        hierarchy.release()
-        var best: Array<Point>? = null
-        var bestArea = minArea
-        for (c in contours) {
-            var approx = approx4(c.toArray())
-            if (approx == null || !Imgproc.isContourConvex(MatOfPoint(*approx))) {
-                val idx = MatOfInt()
-                Imgproc.convexHull(c, idx)
-                val src = c.toArray()
-                val hull = idx.toArray().map { src[it] }.toTypedArray()
-                idx.release()
-                approx = approx4(hull) ?: continue
-            }
-            val area = Imgproc.contourArea(MatOfPoint2f(*approx))
-            if (area > bestArea) {
-                best = approx
-                bestArea = area
-            }
+        return try {
+            TextAlign.orientation(rgb)
+        } finally {
+            rgb.release()
         }
-        contours.forEach { it.release() }
-        return best?.let { pts -> Quad(pts.map { it.x.toFloat() to it.y.toFloat() }) }
-    }
-
-    private fun approx4(points: Array<Point>): Array<Point>? {
-        if (points.size < 4) return null
-        val curve = MatOfPoint2f(*points)
-        val peri = Imgproc.arcLength(curve, true)
-        val out = MatOfPoint2f()
-        Imgproc.approxPolyDP(curve, out, 0.02 * peri, true)
-        val res = out.toArray()
-        curve.release()
-        out.release()
-        return if (res.size == 4) res else null
     }
 
     // ---------- перспектива и поворот ----------
@@ -312,6 +268,7 @@ object Processor {
         }
         rgb = limit(rgb, OUTPUT_MAX_SIDE)
         rgb = rotate(rgb, rotation)
+        rgb = TextAlign.deskew(rgb) // строки по горизонту (до ±15°)
 
         val result = applyFilter(rgb, filter)
         rgb.release()
