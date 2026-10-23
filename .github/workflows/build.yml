@@ -43,6 +43,16 @@ jobs:
             echo "::error::В итоговом манифесте появилось разрешение INTERNET"; exit 1
           fi
 
+      - name: Состав APK
+        run: |
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          echo "::notice::APK $(du -k "$APK" | cut -f1) КБ"
+          # группируем по верхнему уровню (lib/arm64-v8a, classes*.dex, res, …): сжатый и полный размер
+          unzip -lv "$APK" | awk 'NR>3 && $1 ~ /^[0-9]+$/ {n=$8; split(n,a,"/"); k=(a[1]=="lib")? a[1]"/"a[2] : (n ~ /\.dex$/ ? "dex" : a[1]); full[k]+=$1; comp[k]+=$3} END {for (k in full) printf "%s %d %d\n", k, comp[k]/1024, full[k]/1024}' | sort -k2 -nr | head -12 | while read k c f; do
+            echo "::notice::$k — в APK $c КБ, после распаковки $f КБ"
+          done
+          unzip -lv "$APK" | grep '\.so$' | awk '{printf "::notice::%s — %d КБ (в APK %d КБ)\n", $8, $1/1024, $3/1024}'
+
       - uses: actions/upload-artifact@v5
         with:
           name: skaner-debug-apk
