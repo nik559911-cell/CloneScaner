@@ -43,6 +43,10 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import kotlin.math.roundToInt
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -114,7 +118,8 @@ fun CropScreen(pageId: String, onNext: () -> Unit, onBack: () -> Unit) {
             val handle = with(density) { 11.dp.toPx() }
             val accent = if (valid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
 
-            Image(b.asImageBitmap(), "Снимок", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            val image = remember(b) { b.asImageBitmap() }
+            Image(image, "Снимок", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
 
             var active by remember { mutableIntStateOf(-1) }
             Canvas(
@@ -156,6 +161,43 @@ fun CropScreen(pageId: String, onNext: () -> Unit, onBack: () -> Unit) {
                 pts.forEachIndexed { i, o ->
                     drawCircle(Color.White, if (i == active) handle * 1.4f else handle, o)
                     drawCircle(accent, if (i == active) handle * 1.4f else handle, o, style = Stroke(3.dp.toPx()))
+                }
+
+                // Лупа: пока тянем угол, вверху — увеличенный участок вокруг него с крестиком в центре.
+                // Обычно слева; если угол сам у левого верхнего края — справа, чтобы не закрывать его.
+                if (active in 0..3) {
+                    val zoom = 3f
+                    val radius = 64.dp.toPx()
+                    val margin = 8.dp.toPx()
+                    val corner = pts[active]
+                    val leftCenter = Offset(margin + radius, margin + radius)
+                    val center = if (corner.x < leftCenter.x + radius + margin && corner.y < leftCenter.y + radius + margin) {
+                        Offset(size.width - margin - radius, margin + radius)
+                    } else {
+                        leftCenter
+                    }
+                    val circle = Path().apply { addOval(androidx.compose.ui.geometry.Rect(center, radius)) }
+                    clipPath(circle) {
+                        drawRect(Color.Black, topLeft = center - Offset(radius, radius), size = androidx.compose.ui.geometry.Size(radius * 2, radius * 2))
+                        // точка угла (в пикселях оригинала) должна оказаться в центре лупы
+                        val c = corners[active]
+                        val origin = center - Offset(c.x * scale * zoom, c.y * scale * zoom)
+                        drawImage(
+                            image,
+                            dstOffset = IntOffset(origin.x.roundToInt(), origin.y.roundToInt()),
+                            dstSize = IntSize((p.width * scale * zoom).roundToInt(), (p.height * scale * zoom).roundToInt()),
+                        )
+                        // линии рамки в увеличении — видно, куда ложится сторона
+                        val zp = corners.map { origin + Offset(it.x * scale * zoom, it.y * scale * zoom) }
+                        for (i in 0 until 4) drawLine(accent, zp[i], zp[(i + 1) % 4], strokeWidth = 2.dp.toPx())
+                    }
+                    drawCircle(Color.White, radius, center, style = Stroke(3.dp.toPx()))
+                    // маленький крестик в центре: в белой обводке, чтобы был виден и на тёмном, и на светлом
+                    val arm = 9.dp.toPx()
+                    for ((col, w) in listOf(Color.White to 4.dp.toPx(), Color.Black to 1.5.dp.toPx())) {
+                        drawLine(col, center - Offset(arm, 0f), center + Offset(arm, 0f), strokeWidth = w)
+                        drawLine(col, center - Offset(0f, arm), center + Offset(0f, arm), strokeWidth = w)
+                    }
                 }
             }
         }
