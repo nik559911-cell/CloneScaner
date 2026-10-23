@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Временная иконка: лист с загнутым углом и рамкой обрезки. Заменится на этапе brand. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#37474F" android:pathData="M0,0h108v108h-108z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M34,24h30l12,12v48h-42z" />
+    <path android:fillColor="#B0BEC5" android:pathData="M64,24v12h12z" />
+    <path android:fillColor="#37474F" android:pathData="M40,46h28v3h-28zM40,54h28v3h-28zM40,62h20v3h-20z" />
+    <path android:strokeColor="#FFC107" android:strokeWidth="4"
+        android:pathData="M26,34v-10h10M82,34v-10h-10M26,74v10h10M82,74v10h-10" />
+</vector>
