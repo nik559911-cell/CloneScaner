@@ -24,7 +24,7 @@ jobs:
       - name: Сборка debug-APK
         run: ./gradlew --no-daemon assembleDebug
 
-      - name: Проверка: в манифесте нет сетевых разрешений
+      - name: "Проверка — в манифесте нет сетевых разрешений"
         run: |
           MANIFEST=app/build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml
           [ -f "$MANIFEST" ] || MANIFEST=$(find app/build/intermediates -name AndroidManifest.xml -path '*merged_manifest*' | head -1)
