@@ -71,16 +71,19 @@ jobs:
           path: app/build/outputs/apk/release/*armeabi-v7a*.apk
           if-no-files-found: error
 
-      # Релиз: git tag v0.6.1 && git push origin v0.6.1 — тег должен совпадать с versionName
+      # Релиз: создаётся сам при сборке main, если для текущей versionName его ещё нет.
+      # Новый релиз = поднять versionCode/versionName в app/build.gradle.kts (+ release-notes/vX.Y.Z.md).
       - name: Релиз на GitHub
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$GITHUB_REF_NAME" != "v$APP_VERSION" ]; then
-            echo "::error::Тег $GITHUB_REF_NAME не совпадает с версией в app/build.gradle.kts (v$APP_VERSION)"; exit 1
+          TAG="v$APP_VERSION"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Релиз $TAG уже есть — пропускаю"; exit 0
           fi
-          NOTES="release-notes/$GITHUB_REF_NAME.md"
+          NOTES="release-notes/$TAG.md"
           if [ -f "$NOTES" ]; then ARGS=(--notes-file "$NOTES"); else ARGS=(--generate-notes); fi
-          gh release create "$GITHUB_REF_NAME" app/build/outputs/apk/release/*.apk \
-            --title "Сканер $APP_VERSION" "${ARGS[@]}"
+          gh release create "$TAG" app/build/outputs/apk/release/*.apk \
+            --target "$GITHUB_SHA" --title "Сканер $APP_VERSION" "${ARGS[@]}"
+          echo "::notice::Создан релиз $TAG"
