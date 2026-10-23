@@ -4,6 +4,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FloatingActionButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,7 +37,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -81,23 +88,37 @@ fun DocsScreen(openCamera: (String) -> Unit, openDoc: (String) -> Unit) {
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Документы") },
-                actions = {
-                    TextButton(
-                        enabled = !importing,
-                        onClick = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                    ) { Text("Из галереи") }
-                },
-            )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { scope.launch { openCamera(repo.createDraft()) } },
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                text = { Text("Сканировать") },
-            )
+        topBar = { TopAppBar(title = { Text("Документы") }) },
+        // Обе кнопки — в нижней панели: список заканчивается над ними и не уходит под кнопки.
+        bottomBar = {
+            val accent = MaterialTheme.colorScheme.primaryContainer
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                OutlinedButton(
+                    enabled = !importing,
+                    onClick = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    shape = FloatingActionButtonDefaults.extendedFabShape,
+                    border = BorderStroke(2.dp, accent),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    modifier = Modifier.weight(1f).height(56.dp),
+                ) {
+                    Text("Из галереи", style = MaterialTheme.typography.labelLarge)
+                }
+                ExtendedFloatingActionButton(
+                    onClick = { scope.launch { openCamera(repo.createDraft()) } },
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    text = { Text("Сканировать") },
+                    elevation = FloatingActionButtonDefaults.bottomAppBarFabElevation(),
+                    modifier = Modifier.weight(1f).height(56.dp),
+                )
+            }
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
