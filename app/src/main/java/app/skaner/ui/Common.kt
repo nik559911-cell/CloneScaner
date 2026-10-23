@@ -43,15 +43,17 @@ fun FileImage(path: String?, key: Any?, maxSide: Int, modifier: Modifier = Modif
     }
 }
 
-fun sharePdf(context: Context, file: File) {
+fun sharePdf(context: Context, file: File) = shareFile(context, file, "application/pdf", "Отправить PDF")
+
+fun shareFile(context: Context, file: File, mime: String, title: String) {
     val uri = FileProvider.getUriForFile(context, context.packageName + ".files", file)
     val send = Intent(Intent.ACTION_SEND).apply {
-        type = "application/pdf"
+        type = mime
         putExtra(Intent.EXTRA_STREAM, uri)
         putExtra(Intent.EXTRA_SUBJECT, file.nameWithoutExtension)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    context.startActivity(Intent.createChooser(send, "Отправить PDF").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    context.startActivity(Intent.createChooser(send, title).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
 val filterNames = mapOf(

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -44,6 +45,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import app.skaner.cv.ImageIo
@@ -62,6 +64,7 @@ private const val DISPLAY_SIDE = 1600
 @Composable
 fun CropScreen(pageId: String, onNext: () -> Unit, onBack: () -> Unit) {
     val repo = repo()
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var page by remember { mutableStateOf<PageEntity?>(null) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -84,7 +87,14 @@ fun CropScreen(pageId: String, onNext: () -> Unit, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         Row(Modifier.statusBarsPadding().fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад", tint = Color.White) }
-            Text("Границы листа", color = Color.White, style = MaterialTheme.typography.titleMedium)
+            Text("Границы листа", color = Color.White, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            // исходный снимок без обработки — чтобы прислать пример, где обрезка ошиблась
+            IconButton(onClick = {
+                scope.launch {
+                    val f = repo.originalForShare(pageId)
+                    if (f != null) shareFile(context, f, "image/jpeg", "Отправить исходное фото") else error = "Исходное фото не найдено"
+                }
+            }) { Icon(Icons.Filled.Share, "Отправить исходное фото", tint = Color.White) }
         }
 
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {

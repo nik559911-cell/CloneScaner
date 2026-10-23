@@ -98,16 +98,21 @@ fun FilterScreen(pageId: String, onMorePages: (String) -> Unit, onDone: (String)
         }
     }
 
-    // Превью — готовый файл, повёрнутый в памяти на разницу между выбранным и применённым поворотом.
-    val preview by produceState<Bitmap?>(null, page?.processedPath, page?.updatedAt) {
-        val path = page?.processedPath
-        value = if (path == null) null else withContext(Dispatchers.IO) {
-            runCatching { ImageIo.loadUpright(File(path), 2000) }.getOrNull()
+    // Превью — готовый файл и поворот, которому он соответствует (в базе они меняются вместе, после пересчёта).
+    // Показываем его повёрнутым на разницу с выбранным поворотом: пока новый файл не готов,
+    // на экране остаётся старая картинка, повёрнутая как нужно, — без «отката».
+    val preview by produceState<Pair<Bitmap, Int>?>(null, page?.processedPath, page?.updatedAt) {
+        val p = page
+        val path = p?.processedPath
+        if (p != null && path != null) {
+            val bmp = withContext(Dispatchers.IO) { runCatching { ImageIo.loadUpright(File(path), 2000) }.getOrNull() }
+            if (bmp != null) value = bmp to p.rotation
         }
     }
-    val delta = page?.let { p -> if (pendingRotation < 0) 0 else ((pendingRotation - p.rotation) % 360 + 360) % 360 } ?: 0
+    val target = page?.let { if (pendingRotation >= 0) pendingRotation else it.rotation } ?: 0
+    val delta = preview?.let { ((target - it.second) % 360 + 360) % 360 } ?: 0
     val shown = remember(preview, delta) {
-        val b = preview
+        val b = preview?.first
         if (b == null || delta == 0) b else Bitmap.createBitmap(b, 0, 0, b.width, b.height, Matrix().apply { postRotate(delta.toFloat()) }, true)
     }
 

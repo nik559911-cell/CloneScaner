@@ -100,18 +100,23 @@ class Repo(private val context: Context, private val db: AppDb, private val file
         return addPage(docId, tmp)
     }
 
-    /** Сохранить рамку/поворот/фильтр и пересчитать страницу от оригинала. */
+    /**
+     * Сохранить рамку/поворот/фильтр и пересчитать страницу от оригинала.
+     * В базу всё пишется одной записью ПОСЛЕ того, как готов файл: иначе экран на миг видит
+     * новый поворот со старой картинкой (так поворот «откатывался»).
+     */
     suspend fun updatePage(pageId: String, quad: Quad?, rotation: Int, filter: String) {
-        val page = dao.getPage(pageId) ?: return
-        dao.updatePage(
-            page.copy(quad = quad?.toJson(), rotation = 0, filter = filter, updatedAt = System.currentTimeMillis()),
-        )
-        render(pageId)
+        render(pageId, Params(quad?.toJson(), rotation, filter))
     }
 
-    suspend fun render(pageId: String) = cpu.withLock {
+    private data class Params(val quad: String?, val rotation: Int, val filter: String)
+
+    suspend fun render(pageId: String): Unit = render(pageId, null)
+
+    private suspend fun render(pageId: String, params: Params?): Unit = cpu.withLock {
         withContext(Dispatchers.Default) {
-            val page = dao.getPage(pageId) ?: return@withContext
+            val stored = dao.getPage(pageId) ?: return@withContext
+            val page = if (params == null) stored else stored.copy(quad = params.quad, rotation = params.rotation, filter = params.filter)
             val orig = ImageIo.loadUpright(File(page.originalPath), 4000)
             val out = try {
                 Processor.process(orig, Quad.fromJson(page.quad), page.rotation, page.filter)
@@ -136,6 +141,15 @@ class Repo(private val context: Context, private val db: AppDb, private val file
                 out.recycle()
             }
         }
+    }
+
+    /** Исходный снимок страницы — для отправки разработчику при неудачной обрезке. */
+    suspend fun originalForShare(pageId: String): File? = withContext(Dispatchers.IO) {
+        val p = dao.getPage(pageId) ?: return@withContext null
+        val src = File(p.originalPath)
+        if (!src.exists()) return@withContext null
+        files.exportDir.mkdirs()
+        File(files.exportDir, "original_${p.id.take(8)}.jpg").also { src.copyTo(it, overwrite = true) }
     }
 
     suspend fun deletePage(pageId: String) {
