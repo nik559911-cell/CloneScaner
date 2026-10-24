@@ -355,6 +355,26 @@ def _levels_from(img_bgr):
     return white, black
 
 
+# Очистка просвечивающего текста с обратной стороны: светло-серые бесцветные пиксели → белый.
+# Яркость 0..255: до SHOW_LO не трогаем, от SHOW_HI — чисто белый, между — плавно (smoothstep).
+# Цветное (печати, синие подписи) не трогаем: насыщенность (max−min) ≥ CHROMA_HI.
+SHOW_LO, SHOW_HI = 140.0, 217.0
+CHROMA_LO, CHROMA_HI = 25.5, 38.25
+
+
+def remove_show_through(img_u8):
+    """img_u8 — трёхканальная uint8. Работает так же, как TextAlign/Processor.kt (поканально, один float-слой)."""
+    ch = [c.astype(np.float32) for c in cv2.split(img_u8)]
+    lum = (ch[0] + ch[1] + ch[2]) / 3.0
+    chroma = np.maximum(np.maximum(ch[0], ch[1]), ch[2]) - np.minimum(np.minimum(ch[0], ch[1]), ch[2])
+    t = np.clip((lum - SHOW_LO) / (SHOW_HI - SHOW_LO), 0, 1)
+    t = t * t * (3 - 2 * t)
+    gray = np.clip((CHROMA_HI - chroma) / (CHROMA_HI - CHROMA_LO), 0, 1)
+    a = t * gray
+    out = [np.clip(c + a * (255.0 - c) + 0.5, 0, 255).astype(np.uint8) for c in ch]
+    return cv2.merge(out)
+
+
 def filter_white(img_bgr, gray=False):
     white, black = _levels_from(img_bgr)
     chans = []
@@ -364,7 +384,7 @@ def filter_white(img_bgr, gray=False):
         f = np.power(f, 1.25)
         f = np.maximum(f, np.where(f > 0.94, 1.0, 0.0))
         chans.append(np.clip(f * 255, 0, 255).astype(np.uint8))
-    out = cv2.merge(chans)
+    out = remove_show_through(cv2.merge(chans))
     if gray:
         out = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
     return out

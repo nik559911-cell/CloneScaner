@@ -184,10 +184,69 @@ object Processor {
             f.release()
             u8
         }
+        removeShowThrough(out)
         val merged = Mat()
         Core.merge(out, merged)
         out.forEach { it.release() }
         return merged
+    }
+
+    // Очистка просвечивающего текста с обратной стороны (proto/pipeline.py: remove_show_through).
+    // Яркость 0..255: до SHOW_LO не трогаем, от SHOW_HI — чисто белый, между — плавно (smoothstep).
+    // Цветное (печати, синие подписи) не трогаем: насыщенность max−min ≥ CHROMA_HI.
+    private const val SHOW_LO = 140.0
+    private const val SHOW_HI = 217.0
+    private const val CHROMA_LO = 25.5
+    private const val CHROMA_HI = 38.25
+
+    /** Светло-серые бесцветные пиксели → белый. Каналы uint8 изменяются на месте. */
+    private fun removeShowThrough(ch: List<Mat>) {
+        // яркость = среднее трёх каналов
+        val lum = Mat()
+        ch[0].convertTo(lum, CvType.CV_32F)
+        val tmp = Mat()
+        ch[1].convertTo(tmp, CvType.CV_32F); Core.add(lum, tmp, lum)
+        ch[2].convertTo(tmp, CvType.CV_32F); Core.add(lum, tmp, lum)
+        Core.multiply(lum, Scalar(1.0 / 3.0), lum)
+
+        // насыщенность = max − min по каналам
+        val mx = Mat(); val mn = Mat()
+        Core.max(ch[0], ch[1], mx); Core.max(mx, ch[2], mx)
+        Core.min(ch[0], ch[1], mn); Core.min(mn, ch[2], mn)
+        val chroma8 = Mat()
+        Core.subtract(mx, mn, chroma8)
+        mx.release(); mn.release()
+
+        // t = smoothstep((lum − LO) / (HI − LO))
+        val t = lum
+        Core.subtract(t, Scalar(SHOW_LO), t)
+        Core.multiply(t, Scalar(1.0 / (SHOW_HI - SHOW_LO)), t)
+        Core.min(t, Scalar(1.0), t); Core.max(t, Scalar(0.0), t)
+        val s = Mat()
+        Core.multiply(t, Scalar(-2.0), s); Core.add(s, Scalar(3.0), s) // 3 − 2t
+        Core.multiply(t, t, tmp)                                      // t²
+        Core.multiply(tmp, s, t)                                      // t²(3 − 2t)
+        s.release()
+
+        // gray = clip((CHROMA_HI − chroma) / (CHROMA_HI − CHROMA_LO)); alpha = t · gray
+        val gray = Mat()
+        chroma8.convertTo(gray, CvType.CV_32F, -1.0 / (CHROMA_HI - CHROMA_LO), CHROMA_HI / (CHROMA_HI - CHROMA_LO))
+        chroma8.release()
+        Core.min(gray, Scalar(1.0), gray); Core.max(gray, Scalar(0.0), gray)
+        val alpha = t
+        Core.multiply(t, gray, alpha)
+        gray.release()
+
+        // c' = c + alpha · (255 − c)
+        val f = Mat()
+        for (c in ch) {
+            c.convertTo(f, CvType.CV_32F)
+            c.convertTo(tmp, CvType.CV_32F, -1.0, 255.0) // 255 − c
+            Core.multiply(tmp, alpha, tmp)
+            Core.add(f, tmp, f)
+            f.convertTo(c, CvType.CV_8U)
+        }
+        listOf(f, tmp, alpha).forEach { it.release() }
     }
 
     private fun filterLighten(rgb: Mat): Mat {
