@@ -54,6 +54,7 @@ object Detector {
         Imgproc.cvtColor(blur, hsv, Imgproc.COLOR_RGB2HSV)
         val ch = ArrayList<Mat>()
         Core.split(hsv, ch)
+        val hue = ch[0]
         val s = ch[1]
         val v = ch[2]
         val k5 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
@@ -94,9 +95,11 @@ object Detector {
             closed.release()
         }
         for (m in masks) fromContours(m, Imgproc.RETR_EXTERNAL)
-        quads.addAll(houghQuads(union, w, h))
+        val sideLines = sideLines(union, w, h)
+        quads.addAll(houghQuads(sideLines, w, h))
 
         val maps = orientedEdges(gray, s, eGray, e3, w, h)
+        val ink = inkMap(small, w, h)
         val pre = ArrayList<Cand>()
         for (raw in quads) {
             val q = order(raw)
@@ -108,6 +111,8 @@ object Detector {
         pre.sortByDescending { it.key }
 
         val sBytes = ByteArray(w * h).also { s.get(0, 0, it) }
+        val vBytes = ByteArray(w * h).also { v.get(0, 0, it) }
+        val hBytes = ByteArray(w * h).also { hue.get(0, 0, it) }
         val paperBytes = ByteArray(w * h).also { masks[0].get(0, 0, it) }
 
         var best: Array<DoubleArray>? = null
@@ -116,8 +121,11 @@ object Detector {
         for (c in pre.take(40)) { // дорогая оценка — только для лучших по опоре на края
             val con = paperContrast(c.q, v, s, w, h)
             if (con < 0.04) continue // внутри должно быть светлее и бесцветнее, чем снаружи
-            val (frac, colorful) = insideStats(c.q, sBytes, paperBytes, w, h)
-            val score = c.key * (0.8 + con) * frac * sqrt(area(c.q) / (w * h)) * exp(-12 * colorful)
+            val (frac, colorful) = insideStats(c.q, sBytes, vBytes, hBytes, paperBytes, w, h)
+            val crossing = textCrossingSides(c.q, ink, w, h)
+            val inner = innerEdgeSides(c.q, sideLines, maps, ink, w, h)
+            val score = c.key * (0.8 + con) * frac * sqrt(area(c.q) / (w * h)) * exp(-12 * colorful) *
+                Math.pow(0.1, crossing.toDouble()) * Math.pow(0.6, inner.toDouble())
             if (score > bestScore) {
                 bestScore = score
                 best = c.q
@@ -219,36 +227,193 @@ object Detector {
 
     /**
      * (доля «бумаги» внутри рамки, доля пёстрых пикселей внутри рамки).
-     * Пёстрый — насыщенность выше медианы внутри рамки на 12+.
+     * Пёстрый — насыщенность выше медианы внутри рамки на 12+. Не считаем тень на листе: цветной она бывает,
+     * только когда её подсвечивает холодный свет, а лист — тёплый; такая тень темнее 85% медианной яркости
+     * и синеватая (тон 95–135 из 180). Скатерть, стол, фон считаются при любой яркости.
      */
-    private fun insideStats(q: Array<DoubleArray>, s: ByteArray, paper: ByteArray, w: Int, h: Int): Pair<Double, Double> {
+    private fun insideStats(q: Array<DoubleArray>, s: ByteArray, v: ByteArray, hue: ByteArray, paper: ByteArray, w: Int, h: Int): Pair<Double, Double> {
         val inside = Mat.zeros(h, w, CvType.CV_8U)
         Imgproc.fillConvexPoly(inside, MatOfPoint(*q.map { Point(it[0].roundToInt().toDouble(), it[1].roundToInt().toDouble()) }.toTypedArray()), Scalar(255.0))
         val m = ByteArray(w * h).also { inside.get(0, 0, it) }
         inside.release()
-        val hist = IntArray(256)
+        val histS = IntArray(256)
+        val histV = IntArray(256)
         var n = 0
         var paperN = 0
         for (i in 0 until w * h) {
             if (m[i].toInt() == 0) continue
             n++
-            hist[s[i].toInt() and 0xFF]++
+            histS[s[i].toInt() and 0xFF]++
+            histV[v[i].toInt() and 0xFF]++
             if (paper[i].toInt() != 0) paperN++
         }
         if (n == 0) return 0.0 to 1.0
         // медиана как у numpy: при чётном числе — среднее двух средних значений
-        fun nth(k: Int): Int {
-            var acc = 0
-            for (i in 0 until 256) {
-                acc += hist[i]
-                if (acc > k) return i
+        fun median(hist: IntArray): Double {
+            fun nth(k: Int): Int {
+                var acc = 0
+                for (i in 0 until 256) {
+                    acc += hist[i]
+                    if (acc > k) return i
+                }
+                return 255
             }
-            return 255
+            return (nth((n - 1) / 2) + nth(n / 2)) / 2.0
         }
-        val median = (nth((n - 1) / 2) + nth(n / 2)) / 2.0
+        val medS = median(histS)
+        val medV = median(histV)
         var colorful = 0
-        for (i in 0 until 256) if (i > median + 12) colorful += hist[i]
+        for (i in 0 until w * h) {
+            if (m[i].toInt() == 0) continue
+            val sv = s[i].toInt() and 0xFF
+            if (sv <= medS + 12) continue
+            val vv = v[i].toInt() and 0xFF
+            val hv = hue[i].toInt() and 0xFF
+            val shadow = vv < 0.85 * medV && hv in 95..135
+            if (!shadow) colorful++
+        }
         return paperN.toDouble() / n to colorful.toDouble() / n
+    }
+
+    // ---------- текст и внутренние края ----------
+
+    /** Тонкие тёмные штрихи (текст). Порог относительно локальной яркости, поэтому текст в тени тоже находится. */
+    private fun inkMap(small: Mat, w: Int, h: Int): ByteArray {
+        val g = Mat()
+        Imgproc.cvtColor(small, g, Imgproc.COLOR_RGB2GRAY)
+        val bh = Mat()
+        val k9 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(9.0, 9.0))
+        Imgproc.morphologyEx(g, bh, Imgproc.MORPH_BLACKHAT, k9)
+        val gf = Mat(); g.convertTo(gf, CvType.CV_32F)
+        val loc = Mat(); Imgproc.blur(gf, loc, Size(31.0, 31.0))
+        Core.add(loc, Scalar(1.0), loc)
+        val bhf = Mat(); bh.convertTo(bhf, CvType.CV_32F)
+        val r = Mat(); Core.divide(bhf, loc, r)
+        val out = Mat(); Imgproc.threshold(r, out, 0.12, 1.0, Imgproc.THRESH_BINARY)
+        val out8 = Mat(); out.convertTo(out8, CvType.CV_8U)
+        val bytes = ByteArray(w * h).also { out8.get(0, 0, it) }
+        listOf(g, bh, k9, gf, loc, bhf, r, out, out8).forEach { it.release() }
+        return bytes
+    }
+
+    /**
+     * Число сторон, через которые продолжаются строки текста: по обе стороны есть текст, и профили вдоль
+     * стороны совпадают (корреляция > 0.4). Так выглядит край тени, а не край листа.
+     */
+    private fun textCrossingSides(q: Array<DoubleArray>, ink: ByteArray, w: Int, h: Int): Int {
+        val cx = q.sumOf { it[0] } / 4
+        val cy = q.sumOf { it[1] } / 4
+        var count = 0
+        for (i in 0 until 4) {
+            val a = q[i]
+            val b = q[(i + 1) % 4]
+            val dx = b[0] - a[0]
+            val dy = b[1] - a[1]
+            val len = hypot(dx, dy)
+            var nx = -dy / max(len, 1e-6)
+            var ny = dx / max(len, 1e-6)
+            if ((cx - (a[0] + b[0]) / 2) * nx + (cy - (a[1] + b[1]) / 2) * ny < 0) { nx = -nx; ny = -ny }
+            val n = max(8, (len / 2).toInt())
+            val pin = DoubleArray(n)
+            val pout = DoubleArray(n)
+            var vin = 0
+            var vout = 0
+            for (k in 0 until n) {
+                val t = 0.05 + 0.9 * k / (n - 1)
+                val px = a[0] + dx * t
+                val py = a[1] + dy * t
+                for (o in 3 until 12) {
+                    val xi = (px + nx * o).roundToInt(); val yi = (py + ny * o).roundToInt()
+                    val xo = (px - nx * o).roundToInt(); val yo = (py - ny * o).roundToInt()
+                    if (xi in 0 until w && yi in 0 until h) { pin[k] += ink[yi * w + xi].toDouble(); vin++ }
+                    if (xo in 0 until w && yo in 0 until h) { pout[k] += ink[yo * w + xo].toDouble(); vout++ }
+                }
+            }
+            if (vout < 0.5 * vin) continue // снаружи край кадра
+            val din = pin.sum() / max(vin, 1)
+            val dout = pout.sum() / max(vout, 1)
+            if (din < 0.04 || dout < 0.04) continue
+            if (correlation(pin, pout) > 0.4) count++
+        }
+        return count
+    }
+
+    private fun correlation(a: DoubleArray, b: DoubleArray): Double {
+        val ma = a.average()
+        val mb = b.average()
+        var sab = 0.0; var saa = 0.0; var sbb = 0.0
+        for (i in a.indices) {
+            val da = a[i] - ma; val db = b[i] - mb
+            sab += da * db; saa += da * da; sbb += db * db
+        }
+        if (saa < 1e-12 || sbb < 1e-12) return 0.0
+        return sab / sqrt(saa * sbb)
+    }
+
+    /** (доля точек отрезка на краях вдоль него, доля точек на тонких тёмных штрихах или рядом). */
+    private fun segmentSupport(ax: Double, ay: Double, bx: Double, by: Double, maps: Array<ByteArray>, ink: ByteArray, w: Int, h: Int): Pair<Double, Double> {
+        val dx = bx - ax
+        val dy = by - ay
+        val normal = (Math.toDegrees(atan2(dx, -dy)) + 180.0) % 180.0
+        val kb = (normal / (180.0 / NBINS)).toInt() % NBINS
+        val bins = intArrayOf((kb - 1 + NBINS) % NBINS, kb, (kb + 1) % NBINS)
+        val n = max(8, (hypot(dx, dy) / 3).toInt())
+        var hit = 0; var inked = 0; var tot = 0
+        for (j in 0 until n) {
+            val t = 0.05 + 0.9 * j / (n - 1)
+            val x = (ax + dx * t).roundToInt()
+            val y = (ay + dy * t).roundToInt()
+            if (x !in 0 until w || y !in 0 until h) continue
+            tot++
+            val idx = y * w + x
+            if (bins.any { maps[it][idx].toInt() != 0 }) hit++
+            var near = false
+            for (yy in max(0, y - 1)..min(h - 1, y + 1)) for (xx in max(0, x - 1)..min(w - 1, x + 1)) if (ink[yy * w + xx].toInt() != 0) near = true
+            if (near) inked++
+        }
+        return hit.toDouble() / max(tot, 1) to inked.toDouble() / max(tot, 1)
+    }
+
+    /**
+     * Число сторон, параллельно которым ВНУТРИ рамки (на 3–25% её размера от стороны) идёт сильный прямой край
+     * вдоль ≥70% стороны: корешок книги, край соседнего листа — рамка захватила лишнее. Напечатанные тонкие
+     * линии (рамка бланка, таблица) не считаем — они попадают в карту штрихов.
+     */
+    private fun innerEdgeSides(q: Array<DoubleArray>, sideLines: Map<String, List<DoubleArray>>, maps: Array<ByteArray>, ink: ByteArray, w: Int, h: Int): Int {
+        val names = arrayOf("top", "right", "bottom", "left")
+        val cx = q.sumOf { it[0] } / 4
+        val cy = q.sumOf { it[1] } / 4
+        var count = 0
+        for (i in 0 until 4) {
+            val a = q[i]
+            val b = q[(i + 1) % 4]
+            val len = hypot(b[0] - a[0], b[1] - a[1])
+            if (len < 1) continue
+            val ux = (b[0] - a[0]) / len
+            val uy = (b[1] - a[1]) / len
+            var nx = -uy; var ny = ux
+            if ((cx - (a[0] + b[0]) / 2) * nx + (cy - (a[1] + b[1]) / 2) * ny < 0) { nx = -nx; ny = -ny }
+            val opp = q[(i + 2) % 4]
+            val depth = abs((opp[0] - a[0]) * nx + (opp[1] - a[1]) * ny)
+            var found = false
+            for (l in sideLines[names[i]].orEmpty()) {
+                val ex = l[2] - l[0]; val ey = l[3] - l[1]
+                val el = hypot(ex, ey)
+                if (el < 1) continue
+                val ehx = ex / el; val ehy = ey / el
+                if (abs(abs(ehx * ux + ehy * uy) - 1) > 0.0014) continue // угол > 3°
+                val mx = (l[0] + l[2]) / 2; val my = (l[1] + l[3]) / 2
+                val dist = (mx - a[0]) * nx + (my - a[1]) * ny
+                if (!(dist > 0.03 * depth && dist < 0.25 * depth)) continue
+                // отрезок самой прямой напротив стороны рамки: проекции концов стороны на прямую
+                val ta = (a[0] - l[0]) * ehx + (a[1] - l[1]) * ehy
+                val tb = (b[0] - l[0]) * ehx + (b[1] - l[1]) * ehy
+                val (sup, inked) = segmentSupport(l[0] + ehx * ta, l[1] + ehy * ta, l[0] + ehx * tb, l[1] + ehy * tb, maps, ink, w, h)
+                if (sup >= 0.7 && inked < 0.5) { found = true; break }
+            }
+            if (found) count++
+        }
+        return count
     }
 
     private fun paperContrast(q: Array<DoubleArray>, v: Mat, s: Mat, w: Int, h: Int): Double {
@@ -398,7 +563,8 @@ object Detector {
         }
     }
 
-    private fun houghQuads(edges: Mat, w: Int, h: Int): List<Array<DoubleArray>> {
+    /** Прямые-кандидаты для каждой стороны листа (до 6 сильнейших после склейки кусков) + край кадра. */
+    private fun sideLines(edges: Mat, w: Int, h: Int): Map<String, List<DoubleArray>> {
         val lines = Mat()
         Imgproc.HoughLinesP(edges, lines, 1.0, PI / 180, 40, (0.08 * min(w, h)).toInt().toDouble(), (0.03 * max(w, h)).toInt().toDouble())
         val groups: Map<String, ArrayList<Pair<Double, DoubleArray>>> = listOf("top", "bottom", "left", "right")
@@ -429,9 +595,12 @@ object Detector {
             "left" to doubleArrayOf(0.0, 0.0, 0.0, h - 1.0), "right" to doubleArrayOf(w - 1.0, 0.0, w - 1.0, h - 1.0),
         )
         val minWeight = 0.15 * min(w, h)
-        val sides = groups.mapValues { (side, ls) ->
+        return groups.mapValues { (side, ls) ->
             clusterLines(ls, w, h).filter { it.first >= minWeight }.take(6).map { it.second } + frame.getValue(side)
         }
+    }
+
+    private fun houghQuads(sides: Map<String, List<DoubleArray>>, w: Int, h: Int): List<Array<DoubleArray>> {
         val res = ArrayList<Array<DoubleArray>>()
         for (t in sides.getValue("top")) for (b in sides.getValue("bottom")) for (l in sides.getValue("left")) for (r in sides.getValue("right")) {
             val pts = listOf(intersect(t, l), intersect(t, r), intersect(b, r), intersect(b, l))

@@ -89,15 +89,127 @@ def _side_support_oriented(q, maps):
     return hit / max(tot, 1), side_min, real_sides
 
 
-def _colorful_fraction(q, s):
+def ink_map(small_bgr):
+    """Тонкие тёмные штрихи (текст) на уменьшенном кадре. Порог относительно локальной яркости,
+    поэтому текст в тени тоже находится."""
+    g = cv2.cvtColor(small_bgr, cv2.COLOR_BGR2GRAY)
+    bh = cv2.morphologyEx(g, cv2.MORPH_BLACKHAT, cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)))
+    loc = cv2.blur(g.astype(np.float32), (31, 31)) + 1
+    return ((bh.astype(np.float32) / loc) > 0.12).astype(np.uint8)
+
+
+def text_crossing_sides(q, ink, off0=3, off1=12):
+    """Число сторон, через которые продолжаются строки текста: по обе стороны есть текст,
+    и профили вдоль стороны совпадают (корреляция > 0.4). Так выглядит край тени, а не край листа."""
+    h, w = ink.shape
+    c = q.mean(0)
+    count = 0
+    for i in range(4):
+        a, b = q[i], q[(i + 1) % 4]
+        d = b - a
+        L = float(np.linalg.norm(d))
+        nrm = np.array([-d[1], d[0]], np.float32) / max(L, 1e-6)
+        if np.dot(c - (a + b) / 2, nrm) < 0:
+            nrm = -nrm
+        N = max(8, int(L / 2))
+        pin = np.zeros(N); pout = np.zeros(N)
+        vin = vout = 0
+        for k, t in enumerate(np.linspace(0.05, 0.95, N)):
+            p = a + d * t
+            for o in range(off0, off1):
+                xi, yi = (p + nrm * o).round().astype(int)
+                xo, yo = (p - nrm * o).round().astype(int)
+                if 0 <= xi < w and 0 <= yi < h:
+                    pin[k] += ink[yi, xi]; vin += 1
+                if 0 <= xo < w and 0 <= yo < h:
+                    pout[k] += ink[yo, xo]; vout += 1
+        if vout < 0.5 * vin:
+            continue  # снаружи край кадра
+        din, dout = pin.sum() / max(vin, 1), pout.sum() / max(vout, 1)
+        if din < 0.04 or dout < 0.04 or pin.std() < 1e-6 or pout.std() < 1e-6:
+            continue
+        if np.corrcoef(pin, pout)[0, 1] > 0.4:
+            count += 1
+    return count
+
+
+def _segment_support(a, b, maps, ink):
+    """(доля точек отрезка на краях вдоль него, доля точек на тонких тёмных штрихах)."""
+    h, w = ink.shape
+    d = b - a
+    normal = (np.degrees(np.arctan2(d[0], -d[1])) + 180.0) % 180.0
+    kb = int(normal / (180.0 / NBINS)) % NBINS
+    bins = (kb - 1) % NBINS, kb, (kb + 1) % NBINS
+    n = max(8, int(np.linalg.norm(d) / 3))
+    hit = inked = tot = 0
+    for t in np.linspace(0.05, 0.95, n):
+        x, y = (a + d * t).round().astype(int)
+        if 0 <= x < w and 0 <= y < h:
+            tot += 1
+            hit += any(maps[k][y, x] for k in bins)
+            inked += ink[y, x] > 0 or ink[max(0, y - 1):y + 2, max(0, x - 1):x + 2].any()
+    return hit / max(tot, 1), inked / max(tot, 1)
+
+
+def inner_edge_sides(q, side_lines, maps, ink):
+    """Число сторон рамки, параллельно которым ВНУТРИ рамки (на 3–25% её ширины от стороны) проходит
+    сильный прямой край вдоль ≥70% стороны: корешок книги, край соседнего листа. Значит, рамка захватила
+    лишнее. Напечатанные тонкие линии (рамка бланка, таблица) не считаем — они попадают в карту штрихов."""
+    c = q.mean(0)
+    names = ("top", "right", "bottom", "left")
+    count = 0
+    for i in range(4):
+        a, b = q[i], q[(i + 1) % 4]
+        d = b - a
+        L = float(np.linalg.norm(d))
+        if L < 1:
+            continue
+        u = d / L
+        nrm = np.array([-u[1], u[0]], np.float32)
+        if np.dot(c - (a + b) / 2, nrm) < 0:
+            nrm = -nrm
+        opp = q[(i + 2) % 4]
+        depth = abs(float(np.dot(opp - a, nrm)))  # размер рамки поперёк стороны
+        found = False
+        for l in side_lines.get(names[i], []):
+            p1 = np.array(l[:2], np.float32); p2 = np.array(l[2:], np.float32)
+            e = p2 - p1
+            if np.linalg.norm(e) < 1:
+                continue
+            if abs(abs(float(np.dot(e / np.linalg.norm(e), u))) - 1) > 0.0014:  # угол > 3°
+                continue
+            dist = float(np.dot((p1 + p2) / 2 - a, nrm))  # расстояние внутрь рамки
+            if not (0.03 * depth < dist < 0.25 * depth):
+                continue
+            # отрезок самой прямой напротив стороны рамки: проекции концов стороны на прямую
+            eh = e / np.linalg.norm(e)
+            sa = p1 + eh * float(np.dot(a - p1, eh))
+            sb = p1 + eh * float(np.dot(b - p1, eh))
+            sup, inked = _segment_support(sa, sb, maps, ink)
+            if sup >= 0.7 and inked < 0.5:
+                found = True
+                break
+        count += found
+    return count
+
+
+def _colorful_fraction(q, s, v, hue):
     """Доля пёстрых пикселей внутри рамки: насыщенность выше медианы внутри на 12+.
-    У листа насыщенность ровная (печать, бланк), у скатерти с узором — пятна."""
+    Не считаем тень на листе: она бывает цветной, только когда её подсвечивает холодный свет (окно),
+    а лист — тёплый (лампа). Такая тень заметно темнее бумаги (< 85% медианной яркости) и синеватая
+    (тон 95–135 из 180 в OpenCV). Скатерть, стол, фон считаются при любой яркости."""
     inside = np.zeros(s.shape, np.uint8)
     cv2.fillConvexPoly(inside, q.astype(np.int32), 255)
-    vals = s[inside > 0]
-    if vals.size == 0:
+    m = inside > 0
+    n = int(m.sum())
+    if n == 0:
         return 1.0
-    return float((vals > np.median(vals) + 12).mean())
+    sv = s[m].astype(np.int32)
+    vv = v[m].astype(np.int32)
+    hv = hue[m].astype(np.int32)
+    shadow = (vv < 0.85 * np.median(vv)) & (hv >= 95) & (hv <= 135)
+    col = (sv > np.median(sv) + 12) & ~shadow
+    return float(col.sum()) / n
 
 
 def _paper_fraction(q, paper_mask):
@@ -214,8 +326,8 @@ def _side_lines(edges, w, h):
     return out
 
 
-def _hough_quads(edges, w, h):
-    sides = _side_lines(edges, w, h)
+def _hough_quads(edges, w, h, sides=None):
+    sides = sides if sides is not None else _side_lines(edges, w, h)
     res = []
     for t in sides["top"]:
         for b in sides["bottom"]:
@@ -270,9 +382,11 @@ def candidates(img_bgr):
         q = _quad_from_contour(c)
         if q is not None:
             quads.append(q)
-    quads += _hough_quads(edge_maps[0] | edge_maps[1] | edge_maps[2], w, h)
+    side_lines = _side_lines(edge_maps[0] | edge_maps[1] | edge_maps[2], w, h)
+    quads += _hough_quads(edge_maps[0] | edge_maps[1] | edge_maps[2], w, h, side_lines)
 
     maps = oriented_edges(gray, s, edge_maps[0] | edge_maps[1], edge_maps[2])
+    ink = ink_map(small)
     pre = []
     for q in quads:
         q = order_quad(q)
@@ -287,9 +401,11 @@ def candidates(img_bgr):
     for key, sup, q in pre[:40]:  # дорогая оценка — только для лучших по опоре на края
         con = _paper_contrast(q, v, s)
         frac = _paper_fraction(q, masks[0])
-        colorful = _colorful_fraction(q, s)
+        colorful = _colorful_fraction(q, s, v, hsv[..., 0])
         area = cv2.contourArea(q) / (w * h)
-        score = key * (0.8 + con) * frac * np.sqrt(area) * np.exp(-12 * colorful)
+        crossing = text_crossing_sides(q, ink)
+        inner = inner_edge_sides(q, side_lines, maps, ink)
+        score = key * (0.8 + con) * frac * np.sqrt(area) * np.exp(-12 * colorful) * 0.1 ** crossing * 0.6 ** inner
         out.append((score, sup, con, area, q / scale))
     out.sort(key=lambda t: -t[0])
     return out
