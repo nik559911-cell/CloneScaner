@@ -41,6 +41,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -130,18 +131,51 @@ fun CropScreen(pageId: String, onNext: () -> Unit, onBack: () -> Unit) {
                             onDragStart = { pos ->
                                 val screen = corners.map { Offset(ox + it.x * scale, oy + it.y * scale) }
                                 val nearest = screen.indices.minByOrNull { (screen[it] - pos).getDistance() }
-                                active = if (nearest != null && (screen[nearest] - pos).getDistance() <= touchRadius) nearest else -1
+                                active = if (nearest != null && (screen[nearest] - pos).getDistance() <= touchRadius) {
+                                    nearest
+                                } else {
+                                    // середины сторон: 4 + i — сторона от угла i к углу i+1
+                                    val mids = (0 until 4).map { (screen[it] + screen[(it + 1) % 4]) / 2f }
+                                    val m = mids.indices.minByOrNull { (mids[it] - pos).getDistance() }
+                                    if (m != null && (mids[m] - pos).getDistance() <= touchRadius) 4 + m else -1
+                                }
                             },
                             onDragEnd = { active = -1 },
                             onDragCancel = { active = -1 },
                             onDrag = { change, drag ->
-                                if (active >= 0) {
+                                if (active in 0..3) {
                                     change.consume()
                                     val c = corners[active] + drag / scale
                                     corners[active] = Offset(
                                         c.x.coerceIn(0f, (p.width - 1).toFloat()),
                                         c.y.coerceIn(0f, (p.height - 1).toFloat()),
                                     )
+                                } else if (active in 4..7) {
+                                    // вся сторона: оба угла сдвигаются поперёк стороны, параллельно ей самой
+                                    change.consume()
+                                    val i = active - 4
+                                    val a = corners[i]
+                                    val b2 = corners[(i + 1) % 4]
+                                    val dir = b2 - a
+                                    val len = dir.getDistance()
+                                    if (len > 1f) {
+                                        val n = Offset(-dir.y / len, dir.x / len)
+                                        val d = drag / scale
+                                        var shift = n * (d.x * n.x + d.y * n.y)
+                                        // ограничиваем сдвиг так, чтобы оба угла остались на снимке
+                                        val maxX = (p.width - 1).toFloat()
+                                        val maxY = (p.height - 1).toFloat()
+                                        var k = 1f
+                                        for (pt in listOf(a, b2)) {
+                                            if (shift.x > 0f) k = minOf(k, (maxX - pt.x) / shift.x)
+                                            if (shift.x < 0f) k = minOf(k, (0f - pt.x) / shift.x)
+                                            if (shift.y > 0f) k = minOf(k, (maxY - pt.y) / shift.y)
+                                            if (shift.y < 0f) k = minOf(k, (0f - pt.y) / shift.y)
+                                        }
+                                        shift *= k.coerceIn(0f, 1f)
+                                        corners[i] = a + shift
+                                        corners[(i + 1) % 4] = b2 + shift
+                                    }
                                 }
                             },
                         )
@@ -158,6 +192,20 @@ fun CropScreen(pageId: String, onNext: () -> Unit, onBack: () -> Unit) {
                 }
                 drawPath(dim, Color.Black.copy(alpha = 0.5f))
                 for (i in 0 until 4) drawLine(accent, pts[i], pts[(i + 1) % 4], strokeWidth = 3.dp.toPx())
+                // маркеры сторон: продолговатые, вдоль стороны, в её середине
+                for (i in 0 until 4) {
+                    val a = pts[i]
+                    val b2 = pts[(i + 1) % 4]
+                    val mid = (a + b2) / 2f
+                    val dir = b2 - a
+                    val len = dir.getDistance()
+                    if (len < handle * 6) continue // сторона слишком короткая — маркер мешал бы углам
+                    val u = dir / len
+                    val half = handle * (if (active == 4 + i) 1.9f else 1.5f)
+                    val thick = handle * (if (active == 4 + i) 1.1f else 0.85f)
+                    drawLine(Color.White, mid - u * half, mid + u * half, strokeWidth = thick * 2, cap = StrokeCap.Round)
+                    drawLine(accent, mid - u * half, mid + u * half, strokeWidth = thick * 2 - 6.dp.toPx(), cap = StrokeCap.Round)
+                }
                 pts.forEachIndexed { i, o ->
                     drawCircle(Color.White, if (i == active) handle * 1.4f else handle, o)
                     drawCircle(accent, if (i == active) handle * 1.4f else handle, o, style = Stroke(3.dp.toPx()))
@@ -165,11 +213,13 @@ fun CropScreen(pageId: String, onNext: () -> Unit, onBack: () -> Unit) {
 
                 // Лупа: пока тянем угол, вверху — увеличенный участок вокруг него с крестиком в центре.
                 // Обычно слева; если угол сам у левого верхнего края — справа, чтобы не закрывать его.
-                if (active in 0..3) {
+                if (active in 0..7) {
                     val zoom = 3f
                     val radius = 64.dp.toPx()
                     val margin = 8.dp.toPx()
-                    val corner = pts[active]
+                    // точка, за которой следим: угол или середина стороны (в пикселях оригинала и на экране)
+                    val target = if (active < 4) corners[active] else (corners[active - 4] + corners[(active - 3) % 4]) / 2f
+                    val corner = if (active < 4) pts[active] else (pts[active - 4] + pts[(active - 3) % 4]) / 2f
                     val leftCenter = Offset(margin + radius, margin + radius)
                     val center = if (corner.x < leftCenter.x + radius + margin && corner.y < leftCenter.y + radius + margin) {
                         Offset(size.width - margin - radius, margin + radius)
@@ -179,8 +229,8 @@ fun CropScreen(pageId: String, onNext: () -> Unit, onBack: () -> Unit) {
                     val circle = Path().apply { addOval(androidx.compose.ui.geometry.Rect(center, radius)) }
                     clipPath(circle) {
                         drawRect(Color.Black, topLeft = center - Offset(radius, radius), size = androidx.compose.ui.geometry.Size(radius * 2, radius * 2))
-                        // точка угла (в пикселях оригинала) должна оказаться в центре лупы
-                        val c = corners[active]
+                        // отслеживаемая точка (в пикселях оригинала) должна оказаться в центре лупы
+                        val c = target
                         val origin = center - Offset(c.x * scale * zoom, c.y * scale * zoom)
                         drawImage(
                             image,
