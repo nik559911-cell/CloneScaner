@@ -1,6 +1,8 @@
 package app.skaner.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.filled.Close
@@ -150,8 +152,24 @@ fun DocScreen(docId: String, addPage: () -> Unit, openPage: (String) -> Unit, on
             )
         },
         bottomBar = {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .navigationBarsPadding(),
+            ) {
+            // подсказка — отдельной строкой над кнопками, чтобы её не закрывали ни кнопки, ни страницы
+            if (order.size > 1) {
+                Text(
+                    "Удерживайте страницу и перетащите, чтобы поменять порядок",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                )
+            }
             Row(
-                Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 OutlinedButton(
@@ -185,6 +203,7 @@ fun DocScreen(docId: String, addPage: () -> Unit, openPage: (String) -> Unit, on
                     Spacer(Modifier.width(8.dp))
                     Text("Отправить")
                 }
+            }
             }
         },
         floatingActionButton = {
@@ -245,14 +264,6 @@ fun DocScreen(docId: String, addPage: () -> Unit, openPage: (String) -> Unit, on
                         }
                     }
                 }
-            }
-            if (order.size > 1) {
-                Text(
-                    "Удерживайте страницу и перетащите, чтобы поменять порядок",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
-                )
             }
             if (exporting) {
                 Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
