@@ -1,7 +1,6 @@
 package app.skaner.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -160,16 +159,16 @@ fun DocScreen(docId: String, addPage: () -> Unit, openPage: (String) -> Unit, on
             ) {
             // подсказка — отдельной строкой над кнопками, чтобы её не закрывали ни кнопки, ни страницы
             if (order.size > 1) {
-                Text(
-                    "Удерживайте страницу и перетащите, чтобы поменять порядок",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp),
-                )
+                Box(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp), contentAlignment = Alignment.Center) {
+                    FitText(
+                        "Удерживайте страницу, чтобы поменять порядок",
+                        MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
+                    )
+                }
             }
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                // сверху меньше отступ — подсказка ближе к кнопкам
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 OutlinedButton(

@@ -15,8 +15,8 @@ android {
         applicationId = "app.skaner"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.7.3"
+        versionCode = 16
+        versionName = "0.7.4"
     }
 
     // Постоянная подпись: без неё каждая сборка в CI подписывается новым ключом
